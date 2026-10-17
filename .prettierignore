@@ -1,0 +1,8 @@
+**/.git
+**/.svn
+**/.hg
+**/node_modules
+PHPMailer
+dist/uploads
+dist/assets/css/tailwind.css
+dist/assets/js/feather.min.js
