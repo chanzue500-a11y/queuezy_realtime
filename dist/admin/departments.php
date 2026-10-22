@@ -8,9 +8,22 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
   header('Location: ../login.php');
   exit;
 }
+require_once __DIR__ . '/../includes/department_services.php';
+if (empty($_SESSION['department_service_csrf'])) {
+  $_SESSION['department_service_csrf'] = bin2hex(random_bytes(32));
+}
 
 $msg = '';
 $msgType = 'success';
+$showServiceForm = false;
+$serviceForm = [
+  'action' => 'add_service',
+  'dept_id' => 0,
+  'service_id' => 0,
+  'service_name' => '',
+  'service_price' => '',
+  'estimated_time_mins' => '30',
+];
 
 if ($conn) {
   $statusColumn = $conn->query("SHOW COLUMNS FROM departments LIKE 'status'");
@@ -64,8 +77,35 @@ if ($conn) {
 }
 
 
-// Handle Server-Side Actions (Create & Delete Department)
+// Handle department and service changes.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+  if (in_array($_POST['action'], ['add_service', 'rename_service'], true)) {
+    $serviceForm['action'] = $_POST['action'];
+    $serviceForm['dept_id'] = (int)($_POST['dept_id'] ?? 0);
+    $serviceForm['service_id'] = (int)($_POST['service_id'] ?? 0);
+    foreach (['service_name', 'service_price', 'estimated_time_mins'] as $field) {
+      $serviceForm[$field] = is_string($_POST[$field] ?? null) ? trim($_POST[$field]) : '';
+    }
+    $csrf = $_POST['csrf_token'] ?? '';
+    if (!is_string($csrf) || !hash_equals($_SESSION['department_service_csrf'], $csrf)) {
+      $serviceResult = ['ok' => false, 'message' => 'Your session could not be verified. Please try again.'];
+    } elseif ($serviceForm['action'] === 'add_service') {
+      $minutes = filter_var($serviceForm['estimated_time_mins'], FILTER_VALIDATE_INT);
+      $serviceResult = createDepartmentService($conn, $serviceForm['dept_id'], $serviceForm['service_name'], $serviceForm['service_price'], $minutes === false ? 0 : $minutes);
+    } else {
+      $serviceResult = renameDepartmentService($conn, $serviceForm['dept_id'], $serviceForm['service_id'], $serviceForm['service_name']);
+    }
+    if ($serviceResult['ok']) {
+      $notice = $serviceForm['action'] === 'add_service' ? 'service_added' : 'service_renamed';
+      $_SESSION['department_service_notice'] = $notice;
+      header('Location: departments.php?department=' . $serviceForm['dept_id'] . '#department-' . $serviceForm['dept_id']);
+      exit;
+    }
+    $msg = $serviceResult['message'];
+    $msgType = 'error';
+    $showServiceForm = true;
+  }
+
   if ($_POST['action'] === 'update_status' && $conn) {
     $deptId = (int)($_POST['dept_id'] ?? 0);
     $deptStatus = $_POST['status'] ?? 'active';
@@ -154,6 +194,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
 // Fetch ONLY Departments that exist in MySQL
 $deptList = [];
+$servicesByDepartment = [];
 if ($conn) {
     $res = $conn->query("SELECT d.*, (SELECT COUNT(*) FROM services s WHERE s.dept_id = d.id) AS service_count, (SELECT COUNT(*) FROM queue q JOIN services s2 ON q.service_id = s2.id WHERE s2.dept_id = d.id AND q.status = 'waiting') AS waiting_count FROM departments d ORDER BY d.id ASC");
     if ($res) {
@@ -161,7 +202,24 @@ if ($conn) {
             $deptList[] = $row;
         }
     }
+    $serviceResult = $conn->query('SELECT id, dept_id, service_name FROM services ORDER BY service_name ASC, id ASC');
+    if ($serviceResult) {
+      while ($service = $serviceResult->fetch_assoc()) {
+        $servicesByDepartment[(int)$service['dept_id']][] = $service;
+      }
+      $serviceResult->free();
+    }
 }
+$serviceDepartmentName = '';
+foreach ($deptList as $department) {
+  if ((int)$department['id'] === $serviceForm['dept_id']) {
+    $serviceDepartmentName = $department['dept_name'];
+    break;
+  }
+}
+$serviceNotice = $_SESSION['department_service_notice'] ?? '';
+unset($_SESSION['department_service_notice']);
+$editingService = $serviceForm['action'] === 'rename_service';
 
 $pageTitle = 'Departments | Queuezy Admin'; 
 $pageHeading = 'Departments Overview'; 
@@ -326,6 +384,33 @@ require_once '../includes/header.php';
     padding: 6px 10px !important;
     font-size: 10px !important;
   }
+  .dept-service-list { margin: 18px 0 4px; border-top: 1px solid #e2e8f0; }
+  .dept-service-list summary { padding: 14px 0; cursor: pointer; color: #7c3aed; font-size: 12px; font-weight: 800; }
+  .dept-service-list ul { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; }
+  .dept-service-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e2e8f0; }
+  .dept-service-name { min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: #334155; }
+  .dept-service-edit { flex-shrink: 0; border: 1px solid #ddd6fe; border-radius: 8px; background: #f5f3ff; color: #6d28d9; padding: 5px 9px; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .dept-service-empty { margin: 0 0 12px; color: #64748b; font-size: 12px; }
+  .dept-add-service { justify-content: center; width: 100%; margin-top: 16px; }
+  .department-service-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; margin: auto; border: 1px solid #e2e8f0; border-radius: 22px; padding: 24px; background: #ffffff; color: #0f172a; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3); }
+  .department-service-dialog::backdrop { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px); }
+  .department-service-dialog h2 { margin: 0; font-size: 22px; font-weight: 900; }
+  .department-service-context { margin: 8px 0 22px; font-size: 13px; line-height: 1.5; color: #64748b; overflow-wrap: anywhere; }
+  .department-service-dialog label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 700; }
+  .department-service-dialog input:not([type="hidden"]) { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: #ffffff; color: #0f172a; font-size: 14px; }
+  .department-service-dialog input:focus { outline: 2px solid #a78bfa; outline-offset: 2px; }
+  .department-service-field { margin-bottom: 18px; }
+  .department-service-create-fields[hidden] { display: none !important; }
+  .department-service-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+  .department-service-error { margin: 0 0 18px; border-radius: 10px; padding: 12px; background: #fef2f2; color: #b91c1c; font-size: 13px; }
+  body.dark-mode .dept-service-list, body.dark-mode .dept-service-list li { border-color: #334155; }
+  body.dark-mode .dept-service-list summary { color: #c4b5fd; }
+  body.dark-mode .dept-service-name { color: #e2e8f0; }
+  body.dark-mode .dept-service-edit { background: #2e1b52; border-color: #6d28d9; color: #d8b4fe; }
+  body.dark-mode .dept-service-empty, body.dark-mode .department-service-context { color: #94a3b8; }
+  body.dark-mode .department-service-dialog { background: #1e293b; border-color: #475569; color: #f8fafc; }
+  body.dark-mode .department-service-dialog input:not([type="hidden"]) { background: #0f172a; border-color: #475569; color: #f8fafc; }
+  body.dark-mode .department-service-error { background: #451a1a; color: #fca5a5; }
   @media (max-width: 420px) {
     .dept-card-actions {
       grid-template-columns: minmax(0, 1fr) auto;
@@ -554,7 +639,7 @@ require_once '../includes/header.php';
         default => 'fa-layer-group'
       };
     ?>
-    <div class="dept-card-lux dept-item-card" data-name="<?= htmlspecialchars(strtolower($d['dept_name'])) ?>" data-code="<?= htmlspecialchars(strtolower($d['dept_code'])) ?>" style="border-color: #e9d5ff;">
+    <div class="dept-card-lux dept-item-card" id="department-<?= (int)$d['id'] ?>" data-name="<?= htmlspecialchars(strtolower($d['dept_name'])) ?>" data-code="<?= htmlspecialchars(strtolower($d['dept_code'])) ?>" style="border-color: #e9d5ff;">
       <div>
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
           <div style="width: 48px; height: 48px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px; background: #f3e8ff; color: #7c3aed;">
@@ -575,15 +660,33 @@ require_once '../includes/header.php';
           </div>
           <div style="display: flex; justify-content: space-between; padding-bottom: 6px;">
             <span style="color: #64748b; font-weight: 600;">Configured Services:</span>
-            <a href="services.php" style="font-weight: 700; color: #7c3aed; text-decoration: none;"><?= $d['service_count'] ?> Services &rarr;</a>
+            <span style="font-weight: 700; color: #7c3aed;"><?= (int)$d['service_count'] ?> Services</span>
           </div>
           <div style="display: flex; justify-content: space-between; padding-bottom: 6px;">
             <span style="color: #64748b; font-weight: 600;">Current Waiting:</span>
             <span style="color: #7c3aed; font-weight: 800;"><?= $d['waiting_count'] ?> In Queue</span>
           </div>
         </div>
+        <details class="dept-service-list" <?= (int)($_GET['department'] ?? 0) === (int)$d['id'] ? 'open' : '' ?>>
+          <summary>Manage services (<?= (int)$d['service_count'] ?>)</summary>
+          <?php if (empty($servicesByDepartment[(int)$d['id']])): ?>
+          <p class="dept-service-empty">No services yet. Add a service below.</p>
+          <?php else: ?>
+          <ul>
+            <?php foreach ($servicesByDepartment[(int)$d['id']] as $service): ?>
+            <li>
+              <span class="dept-service-name"><?= htmlspecialchars($service['service_name']) ?></span>
+              <button type="button" class="dept-service-edit" data-service-action="rename_service" data-dept-id="<?= (int)$d['id'] ?>" data-dept-name="<?= htmlspecialchars($d['dept_name'], ENT_QUOTES) ?>" data-service-id="<?= (int)$service['id'] ?>" data-service-name="<?= htmlspecialchars($service['service_name'], ENT_QUOTES) ?>" aria-label="Edit <?= htmlspecialchars($service['service_name'], ENT_QUOTES) ?>">Edit</button>
+            </li>
+            <?php endforeach; ?>
+          </ul>
+          <?php endif; ?>
+        </details>
       </div>
 
+      <button type="button" class="btn-lux-primary dept-add-service" data-service-action="add_service" data-dept-id="<?= (int)$d['id'] ?>" data-dept-name="<?= htmlspecialchars($d['dept_name'], ENT_QUOTES) ?>">
+        <i class="fa-solid fa-plus" aria-hidden="true"></i><span>Add Service</span>
+      </button>
       <div class="dept-card-actions" style="padding-top: 16px;">
         <?php $status = $d['status'] ?? 'active'; ?>
         <form method="post" class="inline">
@@ -613,6 +716,38 @@ require_once '../includes/header.php';
   <?php endif; ?>
 
 </div>
+
+<dialog id="departmentServiceDialog" class="department-service-dialog" aria-labelledby="departmentServiceTitle" aria-describedby="departmentServiceContext">
+  <h2 id="departmentServiceTitle"><?= $editingService ? 'Edit Service Name' : 'Add Service' ?></h2>
+  <p id="departmentServiceContext" class="department-service-context"><?= htmlspecialchars($serviceDepartmentName) ?></p>
+  <?php if ($showServiceForm): ?>
+  <p class="department-service-error" id="departmentServiceError" role="alert"><?= htmlspecialchars($msg) ?></p>
+  <?php endif; ?>
+  <form method="post" id="departmentServiceForm" data-no-transition="true">
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['department_service_csrf'], ENT_QUOTES) ?>">
+    <input type="hidden" name="action" id="departmentServiceAction" value="<?= htmlspecialchars($serviceForm['action'], ENT_QUOTES) ?>">
+    <input type="hidden" name="dept_id" id="departmentServiceDeptId" value="<?= $serviceForm['dept_id'] ?>">
+    <input type="hidden" name="service_id" id="departmentServiceId" value="<?= $serviceForm['service_id'] ?>">
+    <div class="department-service-field">
+      <label for="departmentServiceName">Service Name</label>
+      <input type="text" name="service_name" id="departmentServiceName" required maxlength="160" value="<?= htmlspecialchars($serviceForm['service_name'], ENT_QUOTES) ?>" placeholder="Enter service name">
+    </div>
+    <div id="departmentServiceCreateFields" class="department-service-create-fields" <?= $editingService ? 'hidden' : '' ?>>
+      <div class="department-service-field">
+        <label for="departmentServicePrice">Service Price (&#8369;)</label>
+        <input type="number" name="service_price" id="departmentServicePrice" required min="0" max="99999999.99" step="0.01" inputmode="decimal" value="<?= htmlspecialchars($serviceForm['service_price'], ENT_QUOTES) ?>" placeholder="0.00" <?= $editingService ? 'disabled' : '' ?>>
+      </div>
+      <div class="department-service-field">
+        <label for="departmentServiceMinutes">Estimated Time (Minutes)</label>
+        <input type="number" name="estimated_time_mins" id="departmentServiceMinutes" required min="1" max="120" step="1" value="<?= htmlspecialchars($serviceForm['estimated_time_mins'], ENT_QUOTES) ?>" <?= $editingService ? 'disabled' : '' ?>>
+      </div>
+    </div>
+    <div class="department-service-actions">
+      <button type="button" class="btn-lux-secondary" onclick="document.getElementById('departmentServiceDialog').close()">Cancel</button>
+      <button type="submit" class="btn-lux-primary" id="departmentServiceSubmit"><?= $editingService ? 'Save Name' : 'Add Service' ?></button>
+    </div>
+  </form>
+</dialog>
 
 <!-- Add Department Form (inline in page) -->
 <div id="addDeptModal" class="modal-backdrop hidden-modal">
@@ -666,6 +801,25 @@ require_once '../includes/header.php';
 <div class="toast-container" id="toastBox"></div>
 
 <script>
+  function openDepartmentServiceDialog(button) {
+    const editing = button.dataset.serviceAction === 'rename_service';
+    document.getElementById('departmentServiceAction').value = button.dataset.serviceAction;
+    document.getElementById('departmentServiceDeptId').value = button.dataset.deptId;
+    document.getElementById('departmentServiceId').value = button.dataset.serviceId || '';
+    document.getElementById('departmentServiceName').value = button.dataset.serviceName || '';
+    document.getElementById('departmentServicePrice').value = '';
+    document.getElementById('departmentServiceMinutes').value = '30';
+    document.getElementById('departmentServiceTitle').textContent = editing ? 'Edit Service Name' : 'Add Service';
+    document.getElementById('departmentServiceSubmit').textContent = editing ? 'Save Name' : 'Add Service';
+    document.getElementById('departmentServiceContext').textContent = button.dataset.deptName || '';
+    const fields = document.getElementById('departmentServiceCreateFields');
+    fields.hidden = editing;
+    fields.querySelectorAll('input').forEach(input => { input.disabled = editing; });
+    document.getElementById('departmentServiceError')?.remove();
+    document.getElementById('departmentServiceDialog').showModal();
+    document.getElementById('departmentServiceName').focus();
+  }
+
   function filterDeptCards() {
     const q = document.getElementById('deptSearchInput').value.toLowerCase().trim();
     const cards = document.querySelectorAll('.dept-item-card');
@@ -748,6 +902,13 @@ require_once '../includes/header.php';
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-service-action]').forEach(button => {
+      button.addEventListener('click', () => openDepartmentServiceDialog(button));
+    });
+    if (<?= $showServiceForm ? 'true' : 'false' ?>) {
+      document.getElementById('departmentServiceDialog').showModal();
+      document.getElementById('departmentServiceName').focus();
+    }
     if (typeof feather !== 'undefined') {
       feather.replace();
     }
@@ -764,6 +925,9 @@ require_once '../includes/header.php';
     if (urlParams.has('deleted')) {
       showToast('Department deleted from MySQL database.');
     }
+    const serviceNotice = <?= json_encode($serviceNotice, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    if (serviceNotice === 'service_added') showToast('Service added.');
+    if (serviceNotice === 'service_renamed') showToast('Service name updated.');
   });
 </script>
 

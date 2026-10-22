@@ -120,23 +120,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     ];
 
     $departmentStmt = $conn->prepare('INSERT INTO departments (dept_name, dept_code, status) SELECT ?, ?, \'active\' WHERE NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = ?)');
-    $serviceStmt = $conn->prepare('INSERT INTO services (dept_id, service_name, estimated_time_mins) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM services WHERE service_name = ?)');
-    if ($departmentStmt && $serviceStmt) {
+    $serviceStmt = $conn->prepare('INSERT INTO services (dept_id, service_name, estimated_time_mins) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM services WHERE dept_id = ? AND service_name = ?)');
+    $serviceCountStmt = $conn->prepare('SELECT COUNT(*) AS service_count FROM services WHERE dept_id = ?');
+    if ($departmentStmt && $serviceStmt && $serviceCountStmt) {
       foreach ($catalog as [$departmentName, $departmentCode, $serviceNames]) {
         $departmentStmt->bind_param('sss', $departmentName, $departmentCode, $departmentName);
         $departmentStmt->execute();
         $departmentResult = $conn->query("SELECT id FROM departments WHERE dept_name = '" . $conn->real_escape_string($departmentName) . "' LIMIT 1");
         $department = $departmentResult ? $departmentResult->fetch_assoc() : null;
         $departmentId = (int)($department['id'] ?? 0);
+        if ($departmentId <= 0) {
+          continue;
+        }
+        $serviceCountStmt->bind_param('i', $departmentId);
+        if (!$serviceCountStmt->execute()) {
+          continue;
+        }
+        $serviceCount = $serviceCountStmt->get_result()->fetch_assoc();
+        // Initialize empty departments only; keep administrators' service names.
+        if ((int)($serviceCount['service_count'] ?? 0) > 0) {
+          continue;
+        }
         foreach ($serviceNames as $serviceName) {
           $estimatedTime = 30;
-          $serviceStmt->bind_param('isis', $departmentId, $serviceName, $estimatedTime, $serviceName);
+          $serviceStmt->bind_param('isiis', $departmentId, $serviceName, $estimatedTime, $departmentId, $serviceName);
           $serviceStmt->execute();
         }
       }
     }
-    $departmentStmt?->close();
-    $serviceStmt?->close();
+    foreach ([$departmentStmt, $serviceStmt, $serviceCountStmt] as $statement) {
+      if ($statement instanceof mysqli_stmt) $statement->close();
+    }
   }
 
 // Fetch ONLY Services that exist in MySQL
