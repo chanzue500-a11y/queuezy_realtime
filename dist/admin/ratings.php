@@ -80,6 +80,7 @@ if ($conn) {
 
 $pageTitle = 'Ratings | Queuezy';
 $pageHeading = 'Ratings';
+$isAdmin = ($_SESSION['user_role'] ?? '') === 'admin';
 require_once '../includes/header.php';
 ?>
 
@@ -205,7 +206,8 @@ require_once '../includes/header.php';
       </thead>
       <tbody id="ratingsTableBody">
         <?php foreach ($ratingRows as $ratingRow): ?>
-        <?php $ratingScore = (int)$ratingRow['rating']; ?>
+        <?php $ratingScore = (int)($ratingRow['rating'] ?? 0); ?>
+        <?php $feedback = trim((string)($ratingRow['feedback'] ?? '')); ?>
         <tr>
           <td>
             <strong><?= htmlspecialchars($ratingRow['ticket_number'] ?? 'Ticket unavailable') ?></strong>
@@ -219,8 +221,8 @@ require_once '../includes/header.php';
             <?php for ($star = 1; $star <= 5; $star++): ?><span aria-hidden="true"><?= $star <= $ratingScore ? '&#9733;' : '&#9734;' ?></span><?php endfor; ?>
             <strong><?= $ratingScore ?>/5</strong>
           </td>
-          <td class="rating-comment"><?= trim((string)($ratingRow['feedback'] ?? '')) !== '' ? htmlspecialchars($ratingRow['feedback']) : '<span class="ratings-count">No comment</span>' ?></td>
-          <td><?= ($ratingRow['payment_status'] ?? '') === 'paid' ? 'Paid · PHP ' . number_format((float)$ratingRow['amount'], 2) : 'Unpaid' ?></td>
+          <td class="rating-comment"><?= $feedback !== '' ? htmlspecialchars($feedback, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '<span class="ratings-count">No comment</span>' ?></td>
+          <td><?= ($ratingRow['payment_status'] ?? '') === 'paid' ? 'Paid &middot; PHP ' . number_format((float)($ratingRow['amount'] ?? 0), 2) : 'Unpaid' ?></td>
           <td><?= htmlspecialchars($ratingRow['created_at'] ?? '') ?></td>
           <td>
             <form method="post" onsubmit="return confirm('Delete this rating?');">
