@@ -10,7 +10,7 @@ if ($userId <= 0) {
     exit;
 }
 
-require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../../database/db.php';
 if (!$conn) {
     http_response_code(503);
     echo json_encode(['ok' => false, 'message' => 'Database unavailable']);
