@@ -9,6 +9,8 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['ad
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
+require_once __DIR__ . '/user_presence.php';
+recordUserActivity($conn ?? null, (int)$_SESSION['user_id']);
 $currentPage = basename($_SERVER['PHP_SELF']);
 $isAdmin = ($_SESSION['user_role'] ?? '') === 'admin';
 $staffMonitorPath = $isAdmin ? '../staff/monitor.php' : 'monitor.php';

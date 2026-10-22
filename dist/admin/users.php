@@ -2,6 +2,7 @@
 require_once '../database/db.php';
 $conn = $conn ?? null;
 require_once '../includes/profile_photo.php';
+require_once '../includes/user_presence.php';
 if (session_status() === PHP_SESSION_NONE) {
   session_start();
 }
@@ -105,7 +106,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // Fetch users from database
 $userList = [];
 if ($conn) {
-    $result = $conn->query("SELECT id, fullname, email, role, created_at FROM users ORDER BY id ASC");
+    $presenceAvailable = ensureUserPresenceColumns($conn);
+    recordUserActivity($conn, (int)($_SESSION['user_id'] ?? 0));
+    $presenceColumns = $presenceAvailable ? 'last_seen_at' : 'NULL AS last_seen_at';
+    $result = $conn->query("SELECT id, fullname, email, role, created_at, $presenceColumns FROM users ORDER BY id ASC");
     if ($result) {
         while ($row = $result->fetch_assoc()) {
             $userList[] = [
@@ -114,6 +118,7 @@ if ($conn) {
                 'email' => $row['email'] ?? '',
                 'role' => strtolower($row['role'] ?? 'customer'),
                 'created_at' => $row['created_at'] ?? 'Just now',
+                'presence' => getUserPresence($row['last_seen_at'] ?? null),
                 'photo_url' => ($photoFilename = getUserProfilePhotoFilename((int)$row['id']))
                   ? '../uploads/profile/' . rawurlencode($photoFilename)
                   : null,
@@ -194,6 +199,25 @@ require_once '../includes/header.php';
   body.dark-mode .users-table-card select { background: #0f172a !important; border-color: #475569 !important; color: #f8fafc !important; }
   body.dark-mode .users-table-card .bg-emerald-50 { background: #052e2b !important; color: #6ee7b7 !important; border-color: #047857 !important; }
   body.dark-mode .users-table-card .bg-red-50 { background: #451a1a !important; color: #fca5a5 !important; border-color: #991b1b !important; }
+
+  .user-presence-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border: 1px solid;
+    border-radius: 9999px;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .user-presence-badge.is-active { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+  .user-presence-badge.is-offline { background: #f1f5f9; color: #64748b; border-color: #cbd5e1; }
+  .user-presence-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .user-last-seen { display: block; margin-top: 5px; font-size: 10px; color: #64748b; white-space: nowrap; }
+  body.dark-mode .user-presence-badge.is-active { background: #052e2b; color: #6ee7b7; border-color: #047857; }
+  body.dark-mode .user-presence-badge.is-offline { background: #334155; color: #cbd5e1; border-color: #475569; }
+  body.dark-mode .user-last-seen { color: #94a3b8; }
 
   .filter-pill {
     padding: 8px 18px;
@@ -352,7 +376,7 @@ require_once '../includes/header.php';
       <h3 class="text-3xl font-black text-slate-900"><?= $totalCount ?></h3>
       <p class="text-xs text-slate-500 mt-2 flex items-center gap-1">
         <i data-feather="check-circle" class="w-3.5 h-3.5 text-emerald-500"></i>
-        <span>Active accounts</span>
+        <span>Registered accounts</span>
       </p>
     </div>
   </div>
@@ -454,7 +478,7 @@ require_once '../includes/header.php';
         <?php foreach ($userList as $u): 
           $roleClass = in_array($u['role'], ['admin', 'superadmin'], true) ? 'admin' : ($u['role'] === 'staff' ? 'staff' : 'customer');
         ?>
-        <tr class="user-row hover:bg-purple-50/40 transition" data-name="<?= htmlspecialchars($u['name']) ?>" data-email="<?= htmlspecialchars($u['email']) ?>" data-role="<?= $roleClass ?>">
+        <tr class="user-row hover:bg-purple-50/40 transition" data-user-id="<?= $u['id'] ?>" data-name="<?= htmlspecialchars($u['name']) ?>" data-email="<?= htmlspecialchars($u['email']) ?>" data-role="<?= $roleClass ?>">
           <td class="py-4 px-6">
             <div class="flex items-center gap-3">
               <?php if (!empty($u['photo_url'])): ?>
@@ -492,10 +516,11 @@ require_once '../includes/header.php';
             <?= htmlspecialchars($u['created_at'] !== 'Just now' ? date('M d, Y h:i A', strtotime($u['created_at'])) : 'Just now') ?>
           </td>
           <td class="py-4 px-4">
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              Active
+            <span class="user-presence-badge <?= $u['presence']['is_active'] ? 'is-active' : 'is-offline' ?>">
+              <span class="user-presence-dot" aria-hidden="true"></span>
+              <span data-presence-status><?= htmlspecialchars($u['presence']['status']) ?></span>
             </span>
+            <span class="user-last-seen <?= $u['presence']['is_active'] ? 'hidden' : '' ?>" data-last-seen><?= htmlspecialchars($u['presence']['last_seen_label']) ?></span>
           </td>
           <td class="py-4 px-6 text-right">
             <?php if ($isAdmin): ?>
@@ -585,6 +610,43 @@ require_once '../includes/header.php';
   const userSearch = document.getElementById('userSearch');
   const emptyState = document.getElementById('emptyState');
 
+  let refreshingUserStatuses = false;
+  async function refreshUserStatuses() {
+    if (refreshingUserStatuses || document.hidden) return;
+    refreshingUserStatuses = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch('../api/user_status.php', { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data.ok || !Array.isArray(data.users)) return;
+      const statuses = new Map(data.users.map(user => [String(user.id), user]));
+      userRows.forEach(row => {
+        const presence = statuses.get(row.dataset.userId);
+        if (!presence) return;
+        const badge = row.querySelector('.user-presence-badge');
+        const lastSeen = row.querySelector('[data-last-seen]');
+        badge.classList.toggle('is-active', presence.is_active);
+        badge.classList.toggle('is-offline', !presence.is_active);
+        row.querySelector('[data-presence-status]').textContent = presence.status;
+        lastSeen.textContent = presence.last_seen_label;
+        lastSeen.classList.toggle('hidden', presence.is_active);
+      });
+    } catch (error) {
+      // Keep the last known status until the next successful refresh.
+    } finally {
+      window.clearTimeout(timeout);
+      refreshingUserStatuses = false;
+    }
+  }
+
+  refreshUserStatuses();
+  window.setInterval(refreshUserStatuses, 5000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshUserStatuses();
+  });
+
   filterPills.forEach(pill => {
     pill.addEventListener('click', () => {
       filterPills.forEach(p => p.classList.remove('active'));
@@ -666,7 +728,9 @@ require_once '../includes/header.php';
       const role = cleanRoleText(rawRole);
       const email = cells[2]?.textContent.trim() || '';
       const created = cells[3]?.textContent.trim() || '';
-      const status = cells[4]?.textContent.trim() || '';
+      const statusLabel = cells[4]?.querySelector('[data-presence-status]')?.textContent.trim() || '';
+      const lastSeen = cells[4]?.querySelector('[data-last-seen]:not(.hidden)')?.textContent.trim() || '';
+      const status = [statusLabel, lastSeen].filter(Boolean).join(' - ');
 
       return `
         <tr>

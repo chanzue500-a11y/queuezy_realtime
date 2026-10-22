@@ -24,6 +24,8 @@ if (!$isGuest && !isset($_SESSION['user_id'])) {
 $userRole = strtolower($_SESSION['user_role'] ?? $_SESSION['role'] ?? 'customer');
 
 $userId = (int)($_SESSION['user_id'] ?? 0);
+require_once __DIR__ . '/../includes/user_presence.php';
+recordUserActivity($conn, $userId);
 $userPhotoFilename = getUserProfilePhotoFilename($userId);
 $userPhotoUrl = $userPhotoFilename ? '../uploads/profile/' . rawurlencode($userPhotoFilename) : '';
 $userName = $isGuest ? 'Guest' : ($_SESSION['user_name'] ?? 'Customer');

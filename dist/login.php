@@ -2,13 +2,15 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+require_once __DIR__ . '/database/db.php';
+require_once __DIR__ . '/includes/auth_check.php';
+require_once __DIR__ . '/includes/user_presence.php';
 if (isset($_GET['logout'])) {
+    markUserOffline($conn, (int)($_SESSION['user_id'] ?? 0));
     $_SESSION = [];
     session_destroy();
     session_start();
 }
-require_once __DIR__ . '/database/db.php';
-require_once __DIR__ . '/includes/auth_check.php';
 
 $error = '';
 $success = $_SESSION['registration_success'] ?? '';
@@ -43,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['user_id'] = (int) ($account['id'] ?? $account['user_id']);
                 $_SESSION['user_role'] = $role;
                 $_SESSION['user_name'] = $account['fullname'] ?? $account['name'] ?? $account['full_name'] ?? $email;
+                recordUserActivity($conn, $_SESSION['user_id']);
                 redirectToRoleDashboard($role);
             }
 

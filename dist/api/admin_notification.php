@@ -10,6 +10,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['ad
 }
 
 require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../includes/user_presence.php';
 if (!$conn) {
     http_response_code(503);
     echo json_encode(['ok' => false, 'message' => 'Database unavailable']);
@@ -26,6 +27,8 @@ $waitingResult = $conn->query("SELECT COUNT(*) AS total FROM queue WHERE status 
 if ($waitingResult) {
     $waitingCount = (int)($waitingResult->fetch_assoc()['total'] ?? 0);
 }
+
+recordUserActivity($conn, (int)$_SESSION['user_id']);
 
 echo json_encode([
     'ok' => true,

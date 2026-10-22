@@ -11,6 +11,7 @@ if ($userId <= 0) {
 }
 
 require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../includes/user_presence.php';
 if (!$conn) {
     http_response_code(503);
     echo json_encode(['ok' => false, 'message' => 'Database unavailable']);
@@ -65,6 +66,8 @@ if ($paymentStmt) {
     $payment = $paymentStmt->get_result()->fetch_assoc();
     $paymentStmt->close();
 }
+
+recordUserActivity($conn, $userId);
 
 echo json_encode([
     'ok' => true,
