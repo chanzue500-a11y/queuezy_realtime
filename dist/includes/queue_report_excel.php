@@ -85,7 +85,7 @@ function queueReportExcelSheet(XMLWriter $writer, iterable $rows): void
     $writer->writeAttribute('defaultRowHeight', '18');
     $writer->endElement();
     $writer->startElement('cols');
-    foreach ([12, 18, 28, 42, 40, 23, 23, 23, 18, 14, 18, 18, 23, 24] as $index => $width) {
+    foreach ([12, 18, 28, 42, 40, 23, 23, 18, 14, 18, 18, 23] as $index => $width) {
         $writer->startElement('col');
         $writer->writeAttribute('min', (string)($index + 1));
         $writer->writeAttribute('max', (string)($index + 1));
@@ -99,7 +99,7 @@ function queueReportExcelSheet(XMLWriter $writer, iterable $rows): void
     $writer->writeAttribute('r', '1');
     $writer->writeAttribute('ht', '28');
     $writer->writeAttribute('customHeight', '1');
-    $headers = ['Queue ID', 'Ticket', 'Customer', 'Selected service', 'Department', 'Created at', 'Started at', 'Completed at', 'Queue status', 'Payment ID', 'Amount (PHP)', 'Payment status', 'Paid at', 'Amount source'];
+    $headers = ['Queue ID', 'Ticket', 'Customer', 'Selected service', 'Department', 'Created at', 'Completed at', 'Queue status', 'Payment ID', 'Amount (PHP)', 'Payment status', 'Paid at'];
     foreach ($headers as $index => $header) {
         queueReportExcelText($writer, chr(65 + $index) . '1', $header, 1);
     }
@@ -120,14 +120,12 @@ function queueReportExcelSheet(XMLWriter $writer, iterable $rows): void
         queueReportExcelText($writer, 'D' . $rowNumber, $row['service_name'] ?? 'Unavailable service');
         queueReportExcelText($writer, 'E' . $rowNumber, $row['dept_name'] ?? 'Unassigned');
         queueReportExcelDate($writer, 'F' . $rowNumber, $row['created_at']);
-        queueReportExcelDate($writer, 'G' . $rowNumber, $row['started_at']);
-        queueReportExcelDate($writer, 'H' . $rowNumber, $row['completed_at']);
-        queueReportExcelText($writer, 'I' . $rowNumber, $statuses[$row['status']] ?? ucfirst(str_replace('_', ' ', $row['status'])));
-        queueReportExcelNumber($writer, 'J' . $rowNumber, $row['payment_id']);
-        queueReportExcelNumber($writer, 'K' . $rowNumber, $row['amount'], 2);
-        queueReportExcelText($writer, 'L' . $rowNumber, $row['payment_status'] === 'paid' ? 'Paid' : 'Pending');
-        queueReportExcelDate($writer, 'M' . $rowNumber, $row['paid_at']);
-        queueReportExcelText($writer, 'N' . $rowNumber, $row['payment_id'] === null ? 'Current fee estimate' : 'Recorded payment');
+        queueReportExcelDate($writer, 'G' . $rowNumber, $row['completed_at']);
+        queueReportExcelText($writer, 'H' . $rowNumber, $statuses[$row['status']] ?? ucfirst(str_replace('_', ' ', $row['status'])));
+        queueReportExcelNumber($writer, 'I' . $rowNumber, $row['payment_id']);
+        queueReportExcelNumber($writer, 'J' . $rowNumber, $row['amount'], 2);
+        queueReportExcelText($writer, 'K' . $rowNumber, $row['payment_status'] === 'paid' ? 'Paid' : 'Pending');
+        queueReportExcelDate($writer, 'L' . $rowNumber, $row['paid_at']);
         $writer->endElement();
         if ($rowNumber % 1000 === 0) {
             $writer->flush();
@@ -135,7 +133,7 @@ function queueReportExcelSheet(XMLWriter $writer, iterable $rows): void
     }
     $writer->endElement();
     $writer->startElement('autoFilter');
-    $writer->writeAttribute('ref', 'A1:N' . $rowNumber);
+    $writer->writeAttribute('ref', 'A1:L' . $rowNumber);
     $writer->endElement();
     $writer->endElement();
     $writer->endDocument();

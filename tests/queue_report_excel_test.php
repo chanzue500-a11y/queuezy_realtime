@@ -70,7 +70,11 @@ function excelPackage(iterable $rows): array
         $xml = [];
         foreach (['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/worksheets/sheet1.xml'] as $entry) {
             excelAssert(isset($archive[$entry]), 'Package contains ' . $entry);
-            $xml[$entry] = excelXml($archive[$entry]->getContent());
+            $archiveEntry = $archive[$entry];
+            if (!$archiveEntry instanceof PharFileInfo) {
+                throw new RuntimeException('Unable to read package entry ' . $entry);
+            }
+            $xml[$entry] = excelXml($archiveEntry->getContent());
         }
         unset($archive);
         return $xml;
@@ -165,10 +169,12 @@ excelTest('XLSX package links a workbook, worksheet and styles with the expected
     excelAssertSame('worksheets/sheet1.xml', $package['xl/_rels/workbook.xml.rels']->evaluate('string(/p:Relationships/p:Relationship[@Id="' . $sheetId . '"]/@Target)'), 'Workbook points to worksheet');
     excelAssertSame('styles.xml', $package['xl/_rels/workbook.xml.rels']->evaluate('string(/p:Relationships/p:Relationship[contains(@Type,"/styles")]/@Target)'), 'Workbook points to styles');
     $sheet = $package['xl/worksheets/sheet1.xml'];
-    $headers = ['Queue ID', 'Ticket', 'Customer', 'Selected service', 'Department', 'Created at', 'Started at', 'Completed at', 'Queue status', 'Payment ID', 'Amount (PHP)', 'Payment status', 'Paid at', 'Amount source'];
+    $headers = ['Queue ID', 'Ticket', 'Customer', 'Selected service', 'Department', 'Created at', 'Completed at', 'Queue status', 'Payment ID', 'Amount (PHP)', 'Payment status', 'Paid at'];
     foreach ($headers as $index => $header) {
         excelAssertSame($header, excelText($sheet, chr(65 + $index) . '1'), 'Column ' . chr(65 + $index) . ' header');
     }
+    excelAssertSame(12, count($headers), 'Started at and amount source are omitted from the export');
+    excelAssertSame('A1:L4', $sheet->evaluate('string(/s:worksheet/s:autoFilter/@ref)'), 'Filter covers the remaining report columns');
     excelAssertSame(4, $sheet->query('//s:sheetData/s:row')->length, 'Every fixture row is included');
     excelAssertSame(0, $sheet->query('//s:f')->length, 'Worksheet contains no formulas');
 });
@@ -179,12 +185,10 @@ excelTest('XLSX preserves formula-like text, Unicode, whitespace and payment lab
         excelAssertSame($expected, excelText($sheet, $address), $address . ' retains literal text');
     }
     excelAssertSame('Literal _x005F_x0041_', excelText($sheet, 'E3'), 'Literal OOXML escape text cannot be decoded to a different character by Excel');
-    excelAssertSame('Completed', excelText($sheet, 'I2'), 'Completed label');
-    excelAssertSame('Now serving', excelText($sheet, 'I4'), 'Now serving label');
-    excelAssertSame('Paid', excelText($sheet, 'L2'), 'Paid payment label');
-    excelAssertSame('Pending', excelText($sheet, 'L3'), 'Pending payment label');
-    excelAssertSame('Recorded payment', excelText($sheet, 'N2'), 'Recorded money is identified');
-    excelAssertSame('Current fee estimate', excelText($sheet, 'N4'), 'Unrecorded amount is identified as an estimate');
+    excelAssertSame('Completed', excelText($sheet, 'H2'), 'Completed label');
+    excelAssertSame('Now serving', excelText($sheet, 'H4'), 'Now serving label');
+    excelAssertSame('Paid', excelText($sheet, 'K2'), 'Paid payment label');
+    excelAssertSame('Pending', excelText($sheet, 'K3'), 'Pending payment label');
     excelAssertSame('Unknown customer', excelText($sheet, 'C4'), 'Missing customer label');
     excelAssertSame('Unavailable service', excelText($sheet, 'D4'), 'Missing service label');
     excelAssertSame('Unassigned', excelText($sheet, 'E4'), 'Missing department label');
@@ -195,16 +199,16 @@ excelTest('XLSX uses numeric amounts and dates, preserves zero and leaves missin
     $sheet = $package['xl/worksheets/sheet1.xml'];
     $styles = $package['xl/styles.xml'];
     excelAssertSame(99.0, excelNumber($sheet, 'A2'), 'Queue ID is numeric');
-    excelAssertSame(69.0, excelNumber($sheet, 'J2'), 'Payment ID is numeric');
-    excelAssertSame(700.5, excelNumber($sheet, 'K2'), 'Payment amount is numeric');
-    excelAssertSame(0.0, excelNumber($sheet, 'K3'), 'Zero amount remains numeric zero');
-    excelAssertSame(1000.0, excelNumber($sheet, 'K4'), 'Estimated amount is numeric');
-    excelAssertSame('#,##0.00', excelFormat($sheet, $styles, 'K2'), 'Amount displays two decimals');
-    foreach (['F2' => '2026-10-15 19:21:00', 'G2' => '2026-10-16 10:45:30', 'H2' => '2026-10-16 11:07:00', 'M2' => '2026-10-16 11:07:00', 'F3' => '2026-10-22 00:00:00'] as $address => $date) {
+    excelAssertSame(69.0, excelNumber($sheet, 'I2'), 'Payment ID is numeric');
+    excelAssertSame(700.5, excelNumber($sheet, 'J2'), 'Payment amount is numeric');
+    excelAssertSame(0.0, excelNumber($sheet, 'J3'), 'Zero amount remains numeric zero');
+    excelAssertSame(1000.0, excelNumber($sheet, 'J4'), 'Estimated amount is numeric');
+    excelAssertSame('#,##0.00', excelFormat($sheet, $styles, 'J2'), 'Amount displays two decimals');
+    foreach (['F2' => '2026-10-15 19:21:00', 'G2' => '2026-10-16 11:07:00', 'L2' => '2026-10-16 11:07:00', 'F3' => '2026-10-22 00:00:00'] as $address => $date) {
         excelAssert(abs(excelDateSerial($date) - excelNumber($sheet, $address)) < 0.0000001, $address . ' represents the original date and time');
         excelAssertSame('yyyy-mm-dd hh:mm:ss', excelFormat($sheet, $styles, $address), $address . ' displays a readable date and time');
     }
-    foreach (['G3', 'H3', 'M3', 'J4', 'G4', 'H4', 'M4'] as $address) {
+    foreach (['G3', 'L3', 'I4', 'G4', 'L4'] as $address) {
         excelBlank($sheet, $address);
     }
     excelAssertSame('1899-12-29 12:00:00', excelText($sheet, 'F4'), 'Pre-1900 date remains readable without an invalid Excel serial');
@@ -213,9 +217,9 @@ excelTest('XLSX uses numeric amounts and dates, preserves zero and leaves missin
 excelTest('empty exports are valid workbooks containing the header only', static function (): void {
     $sheet = excelPackage([])['xl/worksheets/sheet1.xml'];
     excelAssertSame(1, $sheet->query('//s:sheetData/s:row')->length, 'Empty workbook has one header row');
-    excelAssertSame(14, $sheet->query('//s:sheetData/s:row[@r="1"]/s:c')->length, 'Empty workbook has all report columns');
+    excelAssertSame(12, $sheet->query('//s:sheetData/s:row[@r="1"]/s:c')->length, 'Empty workbook has all report columns');
     excelAssertSame('Queue ID', excelText($sheet, 'A1'), 'First header remains available');
-    excelAssertSame('Amount source', excelText($sheet, 'N1'), 'Last header remains available');
+    excelAssertSame('Paid at', excelText($sheet, 'L1'), 'Last header remains available');
 });
 
 excelTest('an iterable failure removes temporary export files and propagates the error', static function (): void {

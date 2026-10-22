@@ -80,6 +80,12 @@ if ($conn) {
     }
 }
 
+$servicesByDepartment = [];
+foreach ($serviceList as $service) {
+    $departmentName = $service['dept_name'] ?? 'Unassigned';
+    $servicesByDepartment[$departmentName][] = $service;
+}
+
 $configuredCount = count(array_filter($serviceList, static fn($service) => (float)$service['amount'] > 0));
 $totalFees = array_sum(array_map(static fn($service) => (float)$service['amount'], $serviceList));
 $totalIncome = 0;
@@ -323,7 +329,7 @@ require_once '../includes/header.php';
     }
 
     .billing-table {
-        min-width: 760px;
+        min-width: 660px;
         width: 100%;
         border-collapse: collapse;
         text-align: left;
@@ -352,33 +358,68 @@ require_once '../includes/header.php';
         border-bottom: 0;
     }
 
-    .billing-table .billing-department-row td {
-        padding: 16px 12px 8px;
-        border-bottom: 0;
-        color: #eadfff;
-        font-size: 0.98rem;
-        font-weight: 700;
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
-    }
-
-    .billing-table .billing-department-row:first-child td {
-        padding-top: 11px;
-    }
-
     .billing-table .billing-service-name {
         color: #e7edf8;
         font-weight: 700;
     }
 
-    .billing-table .billing-department {
-        max-width: 220px;
-        color: #dbe7f5;
+    .billing-department-group {
+        margin: 0 25px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .billing-department-group:last-of-type {
+        border-bottom: 0;
+    }
+
+    .billing-department-group > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 17px 12px;
+        color: #eadfff;
         font-size: 0.9rem;
-        font-weight: 600;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        list-style: none;
+    }
+
+    .billing-department-group > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .billing-department-group > summary::after {
+        content: '+';
+        color: #b8a3ff;
+        font-size: 1.25rem;
+        line-height: 1;
+    }
+
+    .billing-department-group[open] > summary::after {
+        content: '\2212';
+    }
+
+    .billing-department-group > summary:focus-visible {
+        outline: 2px solid #a78bfa;
+        outline-offset: -2px;
+        border-radius: 6px;
+    }
+
+    .billing-department-count {
+        margin-left: auto;
+        color: #91a3bf;
+        font-size: 0.75rem;
+        font-weight: 500;
         letter-spacing: 0;
-        line-height: 1.25;
-        text-transform: none;
+        white-space: nowrap;
+    }
+
+    .billing-empty-results {
+        padding: 24px;
+        color: #a9b7cc;
+        text-align: center;
     }
 
     .billing-table .billing-updated {
@@ -472,10 +513,14 @@ require_once '../includes/header.php';
             font-size: 1.2rem;
         }
 
-        .billing-panel-head,
-        .billing-table-wrap {
+        .billing-panel-head {
             padding-left: 16px;
             padding-right: 16px;
+        }
+
+        .billing-department-group {
+            margin-left: 16px;
+            margin-right: 16px;
         }
     }
 </style>
@@ -516,45 +561,42 @@ require_once '../includes/header.php';
     <?php if (!$serviceList): ?>
         <p class="text-slate-500">No services found. Add a service before setting its billing amount.</p>
     <?php else: ?>
-        <div class="billing-table-wrap">
-            <table class="billing-table">
-                <thead><tr><th>Service</th><th>Department</th><th>Fee</th><th class="text-right">Updated</th></tr></thead>
-                <tbody>
-                <?php $currentDepartment = null; ?>
-                <?php foreach ($serviceList as $service): ?>
-                    <?php $departmentName = $service['dept_name'] ?? 'Unassigned'; ?>
-                    <?php if ($departmentName !== $currentDepartment): ?>
-                        <?php $currentDepartment = $departmentName; ?>
-                        <tr class="billing-department-row" data-department-group="<?= htmlspecialchars(strtolower($departmentName), ENT_QUOTES) ?>">
-                            <td colspan="4"><?= htmlspecialchars($departmentName) ?></td>
-                        </tr>
-                    <?php endif; ?>
-                    <tr class="billing-row border-b border-slate-100" data-department="<?= htmlspecialchars(strtolower($departmentName), ENT_QUOTES) ?>" data-search="<?= htmlspecialchars(strtolower($service['service_name'] . ' ' . $departmentName), ENT_QUOTES) ?>">
-                        <td class="billing-service-name"><?= htmlspecialchars($service['service_name']) ?></td>
-                        <td class="billing-department"><?= htmlspecialchars($departmentName) ?></td>
-                        <td>
-                            <?php if ($isAdmin): ?>
-                            <form method="post" class="billing-fee-form">
-                                <input type="hidden" name="action" value="save_fee">
-                                <input type="hidden" name="service_id" value="<?= (int)$service['id'] ?>">
-                                <label class="sr-only" for="amount-<?= (int)$service['id'] ?>">Fee for <?= htmlspecialchars($service['service_name']) ?></label>
-                                <span>&#8369;</span><input id="amount-<?= (int)$service['id'] ?>" class="billing-fee-input" type="text" name="amount" inputmode="decimal" data-money-input min="0" value="<?= htmlspecialchars(number_format((float)$service['amount'], 2, '.', ',')) ?>" required>
-                                <button class="billing-save-button" type="submit"><i data-feather="save"></i> Save</button>
-                            </form>
-                            <?php else: ?>
-                            <span>&#8369;<?= number_format((float)$service['amount'], 2) ?></span>
-                            <span>Admin only</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="billing-updated"><?= $service['updated_at'] ? 'Updated ' . htmlspecialchars($service['updated_at']) : 'Not configured' ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                <tr id="billingNoResults" class="hidden">
-                    <td colspan="4" class="text-center">No matching services found.</td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
+        <?php foreach ($servicesByDepartment as $departmentName => $departmentServices): ?>
+            <details class="billing-department-group" data-department-group="<?= htmlspecialchars(strtolower($departmentName), ENT_QUOTES) ?>">
+                <summary>
+                    <span><?= htmlspecialchars($departmentName) ?></span>
+                    <span class="billing-department-count"><?= count($departmentServices) ?> services</span>
+                </summary>
+                <div class="billing-table-wrap">
+                    <table class="billing-table">
+                        <thead><tr><th>Service</th><th>Fee</th><th class="text-right">Updated</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($departmentServices as $service): ?>
+                            <tr class="billing-row border-b border-slate-100" data-search="<?= htmlspecialchars(strtolower($service['service_name'] . ' ' . $departmentName), ENT_QUOTES) ?>">
+                                <td class="billing-service-name"><?= htmlspecialchars($service['service_name']) ?></td>
+                                <td>
+                                    <?php if ($isAdmin): ?>
+                                    <form method="post" class="billing-fee-form">
+                                        <input type="hidden" name="action" value="save_fee">
+                                        <input type="hidden" name="service_id" value="<?= (int)$service['id'] ?>">
+                                        <label class="sr-only" for="amount-<?= (int)$service['id'] ?>">Fee for <?= htmlspecialchars($service['service_name']) ?></label>
+                                        <span>&#8369;</span><input id="amount-<?= (int)$service['id'] ?>" class="billing-fee-input" type="text" name="amount" inputmode="decimal" data-money-input min="0" value="<?= htmlspecialchars(number_format((float)$service['amount'], 2, '.', ',')) ?>" required>
+                                        <button class="billing-save-button" type="submit"><i data-feather="save"></i> Save</button>
+                                    </form>
+                                    <?php else: ?>
+                                    <span>&#8369;<?= number_format((float)$service['amount'], 2) ?></span>
+                                    <span>Admin only</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="billing-updated"><?= $service['updated_at'] ? 'Updated ' . htmlspecialchars($service['updated_at']) : 'Not configured' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        <?php endforeach; ?>
+        <p id="billingNoResults" class="billing-empty-results hidden">No matching services found.</p>
     <?php endif; ?>
 </div>
 </div>
@@ -587,6 +629,7 @@ document.querySelectorAll('.billing-fee-form').forEach((form) => {
 
 const billingSearch = document.getElementById('billingSearch');
 const billingRows = [...document.querySelectorAll('.billing-row')];
+const billingGroups = [...document.querySelectorAll('.billing-department-group')];
 const billingNoResults = document.getElementById('billingNoResults');
 
 billingSearch?.addEventListener('input', () => {
@@ -599,10 +642,10 @@ billingSearch?.addEventListener('input', () => {
         if (matches) visibleRows += 1;
     });
 
-    document.querySelectorAll('.billing-department-row').forEach((groupRow) => {
-        const department = groupRow.dataset.departmentGroup || '';
-        const hasVisibleService = billingRows.some((row) => row.dataset.department === department && !row.classList.contains('hidden'));
-        groupRow.classList.toggle('hidden', !hasVisibleService);
+    billingGroups.forEach((group) => {
+        const hasVisibleService = [...group.querySelectorAll('.billing-row')].some((row) => !row.classList.contains('hidden'));
+        group.classList.toggle('hidden', !hasVisibleService);
+        group.open = Boolean(query && hasVisibleService);
     });
 
     billingNoResults?.classList.toggle('hidden', visibleRows !== 0);
