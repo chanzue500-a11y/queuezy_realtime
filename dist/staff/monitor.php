@@ -45,7 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $paymentStmt->bind_param('ssi', $paymentStatus, $paymentStatus, $queueId);
         if ($paymentStmt->execute()) {
           if ($paymentStatus === 'paid') {
-            $completeStmt = $conn->prepare("UPDATE queue SET status = 'completed', completed_at = NOW() WHERE id = ?");
+            $completeStmt = $conn->prepare("UPDATE queue SET status = 'completed', completed_at = NOW()
+              WHERE id = ? AND status NOT IN ('cancelled', 'no_show')");
             if ($completeStmt) {
               $completeStmt->bind_param('i', $queueId);
               $completeStmt->execute();
@@ -72,25 +73,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $newStatus = trim($_POST['new_status'] ?? 'now_serving');
 
         if ($queueId > 0 && in_array($newStatus, ['waiting', 'called', 'now_serving', 'completed', 'cancelled', 'no_show'], true)) {
-          $updateSql = in_array($newStatus, ['called', 'now_serving'], true)
-            ? "UPDATE queue SET status = ?, started_at = NOW() WHERE id = ?"
-            : "UPDATE queue SET status = ? WHERE id = ?";
-          $stmt = $conn->prepare($updateSql);
-            if ($stmt) {
-                $stmt->bind_param("si", $newStatus, $queueId);
-                if ($stmt->execute() && $newStatus === 'completed') {
-                  $paymentStmt = $conn->prepare("INSERT INTO queue_payments (queue_id, amount, status, paid_at)
-                    SELECT q.id, COALESCE(sf.amount, 0), 'pending', NULL
-                    FROM queue q LEFT JOIN service_fees sf ON sf.service_id = q.service_id WHERE q.id = ?
-                    ON DUPLICATE KEY UPDATE amount = VALUES(amount), status = 'pending', paid_at = NULL");
-                  if ($paymentStmt) {
-                    $paymentStmt->bind_param('i', $queueId);
-                    $paymentStmt->execute();
-                    $paymentStmt->close();
-                  }
+            if ($newStatus === 'completed') {
+                $updateSql = "UPDATE queue SET status = ?, completed_at = NOW() WHERE id = ?
+                  AND EXISTS (SELECT 1 FROM queue_payments WHERE queue_id = ? AND status = 'paid')";
+                $stmt = $conn->prepare($updateSql);
+                if ($stmt) {
+                    $stmt->bind_param("sii", $newStatus, $queueId, $queueId);
                 }
+            } else {
+                $updateSql = in_array($newStatus, ['called', 'now_serving'], true)
+                    ? "UPDATE queue SET status = ?, started_at = NOW() WHERE id = ?"
+                    : "UPDATE queue SET status = ? WHERE id = ?";
+                $stmt = $conn->prepare($updateSql);
+                if ($stmt) {
+                    $stmt->bind_param("si", $newStatus, $queueId);
+                }
+            }
+            if ($stmt) {
+                $updated = $stmt->execute();
+                $noRowsUpdated = $stmt->affected_rows === 0;
+                $updateError = $stmt->error;
                 $stmt->close();
-                header("Location: monitor.php?updated=1");
+                if (!$updated) {
+                    error_log('Queuezy queue status update failed: ' . $updateError);
+                    http_response_code(500);
+                    exit('Unable to update ticket status.');
+                }
+                header('Location: monitor.php?' . ($newStatus === 'completed' && $noRowsUpdated ? 'payment_required=1' : 'updated=1'));
                 exit;
             }
         }
@@ -508,14 +517,14 @@ require_once '../includes/header.php';
             <?= (float)$q['service_fee'] > 0 ? '&#8369;' . number_format((float)$q['service_fee'], 2) : '--' ?>
           </td>
           <td>
-            <?php if ($q['status'] === 'no_show'): ?>
+            <?php if (in_array($q['status'], ['cancelled', 'no_show'], true)): ?>
               <span class="font-bold text-slate-400">--</span>
             <?php else: ?>
               <form method="post">
                 <input type="hidden" name="action" value="update_payment">
                 <input type="hidden" name="queue_id" value="<?= (int)$q['id'] ?>">
                 <label class="sr-only" for="payment-status-<?= (int)$q['id'] ?>">Bill status for <?= htmlspecialchars($q['ticket_number']) ?></label>
-                <select id="payment-status-<?= (int)$q['id'] ?>" name="payment_status" onfocus="this.dataset.previousValue = this.value;" onchange="const previousValue = this.dataset.previousValue || this.value; if (this.value === 'paid' && !confirm('Mark this ticket as paid and completed?')) { this.value = previousValue; return; } if (this.value === 'pending' && previousValue === 'paid' && !confirm('Return this ticket to Pending? This will undo the payment status.')) { this.value = previousValue; return; } this.dataset.previousValue = this.value; this.form.dataset.confirmed = 'true'; this.form.submit();" class="rounded-lg border border-slate-200 px-2 py-1 text-xs font-bold <?= $q['payment_status'] === 'paid' ? 'text-emerald-600' : 'text-amber-600' ?>">
+                <select id="payment-status-<?= (int)$q['id'] ?>" name="payment_status" onfocus="this.dataset.previousValue = this.value;" onchange="const previousValue = this.dataset.previousValue || this.value; const isCancelled = <?= json_encode($q['status'] === 'cancelled') ?>; const paidMessage = isCancelled ? 'Mark this cancelled ticket as paid?' : 'Mark this ticket as paid and completed?'; if (this.value === 'paid' && !confirm(paidMessage)) { this.value = previousValue; return; } if (this.value === 'pending' && previousValue === 'paid' && !confirm('Return this ticket to Pending? This will undo the payment status.')) { this.value = previousValue; return; } this.dataset.previousValue = this.value; this.form.dataset.confirmed = 'true'; this.form.submit();" class="rounded-lg border border-slate-200 px-2 py-1 text-xs font-bold <?= $q['payment_status'] === 'paid' ? 'text-emerald-600' : 'text-amber-600' ?>">
                   <option value="pending" <?= $q['payment_status'] === 'pending' ? 'selected' : '' ?>>Pending</option>
                   <option value="paid" <?= $q['payment_status'] === 'paid' ? 'selected' : '' ?>>Paid</option>
                 </select>
@@ -721,6 +730,16 @@ require_once '../includes/header.php';
   document.addEventListener('DOMContentLoaded', () => {
     if (typeof feather !== 'undefined') {
       feather.replace();
+    }
+    if (new URLSearchParams(window.location.search).get('payment_required') === '1') {
+      const toastBox = document.getElementById('toastBox');
+      if (toastBox) {
+        const toast = document.createElement('div');
+        toast.className = 'toast-item';
+        toast.setAttribute('role', 'alert');
+        toast.textContent = 'Mark this ticket as paid before completing it.';
+        toastBox.append(toast);
+      }
     }
     document.querySelectorAll('[data-print-receipt]').forEach((button) => {
       button.addEventListener('click', () => printReceiptFromButton(button));

@@ -32,21 +32,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
         }
     } elseif ($action === 'complete') {
-        $stmt = $conn->prepare("UPDATE queue SET status = 'completed', completed_at = NOW() WHERE id = ?");
+        $stmt = $conn->prepare("UPDATE queue SET status = 'completed', completed_at = NOW()
+            WHERE id = ? AND EXISTS (
+                SELECT 1 FROM queue_payments WHERE queue_id = ? AND status = 'paid'
+            )");
         if ($stmt) {
-            $stmt->bind_param('i', $ticket_id);
-            if ($stmt->execute()) {
-                $paymentStmt = $conn->prepare("INSERT INTO queue_payments (queue_id, amount, status, paid_at)
-                    SELECT q.id, COALESCE(sf.amount, 0), 'pending', NULL
-                    FROM queue q LEFT JOIN service_fees sf ON sf.service_id = q.service_id WHERE q.id = ?
-                    ON DUPLICATE KEY UPDATE status = 'pending', paid_at = NULL");
-                if ($paymentStmt) {
-                    $paymentStmt->bind_param('i', $ticket_id);
-                    $paymentStmt->execute();
-                    $paymentStmt->close();
-                }
+            $stmt->bind_param('ii', $ticket_id, $ticket_id);
+            $completed = $stmt->execute();
+            $rowsUpdated = $stmt->affected_rows;
+            if (!$completed) {
+                error_log('Queuezy ticket completion failed: ' . $stmt->error);
+                $stmt->close();
+                http_response_code(500);
+                exit('Unable to complete ticket.');
             }
             $stmt->close();
+            if ($rowsUpdated === 0) {
+                header('Location: monitor.php?payment_required=1');
+                exit();
+            }
         }
     }
 

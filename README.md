@@ -32,4 +32,6 @@ When changing the cached asset list or offline page, increment the `queuezy-publ
 
 Keep SMTP passwords and database credentials outside source control. See the environment configuration comments in `dist/database/db.php` and `dist/includes/mail_config.php`. Production deployment needs a PHP web server and the configured database; do not use PHP's development server for public hosting.
 
+The application uses Asia/Manila time for PHP and the MySQL session, so ticket issue times and other database timestamps display consistently. Ensure the host clock is synchronized; stored timestamps still depend on it.
+
 Implementation references: [Tailwind 3 CLI](https://v3.tailwindcss.com/docs/installation), [web app manifest icons](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/icons), and [accessible modal dialog keyboard behavior](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/).
