@@ -715,7 +715,7 @@ require_once '../includes/header.php';
                         <td><span class="report-badge" data-status="<?= $escape($row['status']) ?>"><?= $escape(queueReportStatuses()[$row['status']] ?? ucfirst(str_replace('_', ' ', $row['status']))) ?></span></td>
                         <td class="report-payment">
                             <?php if (in_array($row['status'], ['cancelled', 'no_show'], true)): ?>
-                            <strong>NONE</strong>
+                            <strong>--</strong>
                             <?php else: ?>
                             <strong>&#8369;<?= number_format((float)$row['amount'], 2) ?></strong>
                             <span class="report-badge" data-status="<?= $escape($row['payment_status']) ?>"><?= $row['payment_status'] === 'paid' ? 'Paid' : 'Pending' ?></span>

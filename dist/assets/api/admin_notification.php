@@ -9,7 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['ad
     exit;
 }
 
-require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../../database/db.php';
 $conn = $conn ?? null;
 if (!$conn) {
     http_response_code(503);

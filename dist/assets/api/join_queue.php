@@ -6,7 +6,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['ok' => false, 'message' => 'POST required']);
     exit;
 }
-require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../../database/db.php';
 if (!$conn) {
     echo json_encode(['ok' => false, 'message' => 'Database unavailable']);
     http_response_code(503);
