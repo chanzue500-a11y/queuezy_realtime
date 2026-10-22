@@ -4,20 +4,20 @@ if (!in_array($_SESSION['user_role'] ?? '', ['admin', 'staff'], true)) {
     header('Location: ../login.php');
     exit;
 }
-require_once '../database/db.php';
+require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../includes/ratings_report.php';
 $conn = $conn ?? null;
 
 $ratingRows = [];
 $ratingTotal = 0;
 $averageRating = 0.0;
 $ratingCounts = [1 => 0, 2 => 0, 3 => 0, 4 => 0, 5 => 0];
-$selectedRating = filter_var($_GET['rating'] ?? 0, FILTER_VALIDATE_INT);
-if ($selectedRating === false || $selectedRating < 1 || $selectedRating > 5) {
-  $selectedRating = 0;
-}
-$searchTerm = trim((string)($_GET['search'] ?? ''));
-$searchTerm = substr($searchTerm, 0, 120);
-$searchPattern = '%' . $searchTerm . '%';
+$ratingFilters = ratingsReportFilters($_GET);
+$selectedRating = $ratingFilters['rating'];
+$searchTerm = $ratingFilters['search'];
+$ratingsError = $ratingFilters['errors'] ? implode(' ', $ratingFilters['errors']) : '';
+$hasRatingFilters = $selectedRating > 0 || $searchTerm !== '';
+$filteredExportUrl = 'export_ratings.php?' . http_build_query(['scope' => 'filtered', 'rating' => $selectedRating, 'search' => $searchTerm]);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_rating') {
     $ratingIdToDelete = filter_var($_POST['rating_id'] ?? 0, FILTER_VALIDATE_INT);
@@ -66,24 +66,16 @@ if ($conn) {
         ];
     }
 
-    $ratingsSql = "SELECT qr.id, qr.rating, qr.feedback, qr.created_at, q.ticket_number, s.service_name, d.dept_name, u.fullname, COALESCE(qp.amount, 0) AS amount, COALESCE(qp.status, 'pending') AS payment_status
-        FROM queue_ratings qr
-        LEFT JOIN queue q ON q.id = qr.queue_id
-        LEFT JOIN users u ON u.id = qr.user_id
-        LEFT JOIN services s ON s.id = q.service_id
-        LEFT JOIN departments d ON d.id = s.dept_id
-        LEFT JOIN queue_payments qp ON qp.queue_id = q.id";
-    $filteredRatingsSql = $ratingsSql . " WHERE (? = 0 OR qr.rating = ?) AND (? = '' OR CONCAT_WS(' ', COALESCE(q.ticket_number, ''), COALESCE(u.fullname, ''), COALESCE(s.service_name, ''), COALESCE(d.dept_name, ''), COALESCE(qr.feedback, '')) LIKE ?) ORDER BY qr.created_at DESC LIMIT 500";
-    $ratingsStmt = $conn->prepare($filteredRatingsSql);
-    if ($ratingsStmt) {
-      $ratingsStmt->bind_param('iiss', $selectedRating, $selectedRating, $searchTerm, $searchPattern);
-      $ratingsStmt->execute();
-      $ratingsResult = $ratingsStmt->get_result();
-      while ($ratingRow = $ratingsResult->fetch_assoc()) {
-        $ratingRows[] = $ratingRow;
+    if ($ratingsError === '') {
+        try {
+            $ratingRows = iterator_to_array(ratingsReportRows($conn, $ratingFilters, 500), false);
+        } catch (Throwable $error) {
+            error_log('Ratings report failed: ' . $error->getMessage());
+            $ratingsError = 'Unable to load ratings. Please try again.';
         }
-      $ratingsStmt->close();
     }
+} else {
+    $ratingsError = 'Ratings are temporarily unavailable. Please try again when the database connection is restored.';
 }
 
 $pageTitle = 'Ratings | Queuezy';
@@ -107,6 +99,14 @@ require_once '../includes/header.php';
   .ratings-filter-button { min-height: 40px; padding: 8px 14px; border: 1px solid #475569; border-radius: 8px; background: #334155; color: #f8fafc; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
   .ratings-filter-button:hover { background: #475569; }
   .ratings-count { color: #94a3b8; font-size: 12px; }
+  .ratings-export-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ratings-export-button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border: 1px solid #059669; border-radius: 8px; background: #065f46; color: #ecfdf5; font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+  .ratings-export-button:hover { background: #047857; border-color: #34d399; }
+  .ratings-export-button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 3px; }
+  .ratings-export-button svg { width: 16px; height: 16px; }
+  .ratings-export-button--filtered { border-color: #475569; background: #334155; color: #f8fafc; }
+  .ratings-export-button--filtered:hover { border-color: #64748b; background: #475569; }
+  .ratings-error { margin-bottom: 16px; padding: 14px; border: 1px solid #f87171; border-radius: 8px; background: #450a0a; color: #fecaca; font-size: 13px; }
   .ratings-table-wrap { overflow-x: auto; border: 1px solid #334155; border-radius: 12px; background: #1e293b; }
   .ratings-table { width: 100%; min-width: 850px; border-collapse: collapse; text-align: left; }
   .ratings-table th { padding: 12px 14px; border-bottom: 1px solid #334155; color: #94a3b8; font-size: 10px; font-weight: 800; text-transform: uppercase; }
@@ -178,8 +178,17 @@ require_once '../includes/header.php';
       <input id="ratingSearch" name="search" type="search" value="<?= htmlspecialchars($searchTerm, ENT_QUOTES) ?>" placeholder="Search customer, ticket, service, comment" aria-label="Search ratings">
       <button class="ratings-filter-button" type="submit">Apply</button>
     </form>
-    <span class="ratings-count"><span id="visibleRatingCount"><?= count($ratingRows) ?></span> shown</span>
+    <?php if ($isAdmin): ?>
+    <div class="ratings-export-tools">
+      <a class="ratings-export-button" href="export_ratings.php?scope=all" aria-label="Export all ratings to Excel"><i data-feather="download" aria-hidden="true"></i><span>Export Excel</span></a>
+      <?php if ($hasRatingFilters && $ratingsError === ''): ?>
+      <a class="ratings-export-button ratings-export-button--filtered" href="<?= htmlspecialchars($filteredExportUrl, ENT_QUOTES, 'UTF-8') ?>">Export filtered</a>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
   </div>
+
+  <?php if ($ratingsError !== ''): ?><p class="ratings-error" role="alert"><?= htmlspecialchars($ratingsError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p><?php endif; ?>
 
   <div class="ratings-table-wrap">
     <table class="ratings-table">
@@ -233,16 +242,12 @@ require_once '../includes/header.php';
 <script>
   const ratingSearch = document.getElementById('ratingSearch');
   const ratingRows = [...document.querySelectorAll('#ratingsTableBody tr')].filter((row) => row.querySelector('.rating-score'));
-  const visibleRatingCount = document.getElementById('visibleRatingCount');
   ratingSearch?.addEventListener('input', () => {
     const query = ratingSearch.value.trim().toLowerCase();
-    let visibleCount = 0;
     ratingRows.forEach((row) => {
       const isVisible = row.textContent.toLowerCase().includes(query);
       row.hidden = !isVisible;
-      if (isVisible) visibleCount++;
     });
-    if (visibleRatingCount) visibleRatingCount.textContent = String(visibleCount);
   });
 </script>
 

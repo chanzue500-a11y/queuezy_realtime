@@ -4,72 +4,62 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
     header('Location: ../login.php');
     exit;
 }
-require_once '../database/db.php';
+require_once __DIR__ . '/../database/db.php';
+require_once __DIR__ . '/../includes/queue_report.php';
 $conn = $conn ?? null;
 
-$departmentLabels = [];
-$departmentCounts = [];
-$queueExportRows = [];
-$totalConfiguredFees = 0.00;
-$totalListedFees = 0.00;
-$totalIncome = 0.00;
-$totalQueueCount = 0;
-$completedQueueCount = 0;
-$waitingQueueCount = 0;
-$cancelledQueueCount = 0;
-
-if ($conn) {
-    $queueSummaryResult = $conn->query("SELECT COUNT(*) AS total_count, SUM(status = 'completed') AS completed_count, SUM(status = 'waiting') AS waiting_count, SUM(status = 'cancelled') AS cancelled_count FROM queue");
-    if ($queueSummaryResult && $queueSummary = $queueSummaryResult->fetch_assoc()) {
-        $totalQueueCount = (int)($queueSummary['total_count'] ?? 0);
-        $completedQueueCount = (int)($queueSummary['completed_count'] ?? 0);
-        $waitingQueueCount = (int)($queueSummary['waiting_count'] ?? 0);
-        $cancelledQueueCount = (int)($queueSummary['cancelled_count'] ?? 0);
-    }
-
-    $departmentResult = $conn->query("SELECT d.dept_name, COUNT(q.id) AS ticket_count
-        FROM departments d
-        LEFT JOIN services s ON s.dept_id = d.id
-        LEFT JOIN queue q ON q.service_id = s.id
-        GROUP BY d.id, d.dept_name
-        ORDER BY ticket_count DESC, d.dept_name ASC");
-    if ($departmentResult) {
-        while ($department = $departmentResult->fetch_assoc()) {
-            $departmentLabels[] = $department['dept_name'];
-            $departmentCounts[] = (int) $department['ticket_count'];
-        }
-    }
-
-    $queueResult = $conn->query("SELECT u.fullname, q.ticket_number, s.service_name, q.status
-        FROM queue q
-        LEFT JOIN users u ON u.id = q.user_id
-        LEFT JOIN services s ON s.id = q.service_id
-        WHERE q.status IN ('waiting', 'called', 'now_serving')
-        ORDER BY q.created_at DESC LIMIT 20");
-    if ($queueResult) {
-        while ($row = $queueResult->fetch_assoc()) {
-            $queueExportRows[] = [
-                'ticket_number' => (string)($row['ticket_number'] ?? ''),
-                'fullname' => (string)($row['fullname'] ?? 'Unknown'),
-                'service_name' => (string)($row['service_name'] ?? 'N/A'),
-                'status' => (string)($row['status'] ?? 'waiting'),
-            ];
-        }
-    }
-
-    $feesResult = $conn->query("SELECT COUNT(*) AS configured_count, COALESCE(SUM(amount), 0) AS total_listed_fees
-        FROM service_fees WHERE amount > 0");
-    if ($feesResult && $feesRow = $feesResult->fetch_assoc()) {
-        $totalConfiguredFees = (float) $feesRow['configured_count'];
-        $totalListedFees = (float) $feesRow['total_listed_fees'];
-    }
-
-    $incomeResult = $conn->query("SELECT COALESCE(SUM(amount), 0) AS total_income FROM queue_payments WHERE status = 'paid'");
-    if ($incomeResult && $incomeRow = $incomeResult->fetch_assoc()) {
-        $totalIncome = (float) $incomeRow['total_income'];
+$filters = queueReportFilters($_GET);
+$report = null;
+$reportError = '';
+if (!$conn) {
+    $reportError = 'Reports are temporarily unavailable. Please try again when the database connection is restored.';
+} else {
+    try {
+        $report = queueReportData($conn, $filters);
+    } catch (Throwable $error) {
+        error_log('Queue report failed: ' . $error->getMessage());
+        $reportError = 'Unable to load transaction records. Please try again.';
     }
 }
+$summary = $report['summary'] ?? [];
+$totalQueueCount = (int)($summary['total_count'] ?? 0);
+$completedQueueCount = (int)($summary['completed_count'] ?? 0);
+$waitingQueueCount = (int)($summary['waiting_count'] ?? 0);
+$servingQueueCount = (int)($summary['serving_count'] ?? 0);
+$cancelledQueueCount = (int)($summary['cancelled_count'] ?? 0);
+$noShowQueueCount = (int)($summary['no_show_count'] ?? 0);
+$departmentCounts = array_column($report['department_counts'] ?? [], 'ticket_count');
 $maxDepartmentTickets = max($departmentCounts ?: [0]);
+$rows = $report['rows'] ?? [];
+$page = $report['page'] ?? 1;
+$pages = $report['pages'] ?? 1;
+$escape = static fn($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$dateLabel = static function ($value): string {
+    if (!$value) return '—';
+    $timestamp = strtotime($value);
+    return $timestamp === false ? '—' : date('M j, Y · g:i A', $timestamp);
+};
+$pageUrl = static function (int $target) use ($filters): string {
+    $query = array_diff_key($filters, ['errors' => true]);
+    $query['page'] = $target;
+    return 'reports.php?' . http_build_query(array_filter($query, static fn($value) => $value !== '' && $value !== 0));
+};
+$appliedFilters = [];
+if ($filters['search'] !== '') $appliedFilters[] = 'Search: ' . $filters['search'];
+foreach (['department_id' => ['departments', 'dept_name'], 'service_id' => ['services', 'service_name']] as $key => $lookup) {
+    if ($filters[$key] > 0) {
+        $choices = array_column($report[$lookup[0]] ?? [], $lookup[1], 'id');
+        $appliedFilters[] = ($key === 'department_id' ? 'Department: ' : 'Service: ') . ($choices[$filters[$key]] ?? '#' . $filters[$key]);
+    }
+}
+if ($filters['status'] !== '') $appliedFilters[] = 'Queue: ' . queueReportStatuses()[$filters['status']];
+if ($filters['payment_status'] !== '') $appliedFilters[] = 'Payment: ' . ucfirst($filters['payment_status']);
+if ($filters['date_from'] !== '' || $filters['date_to'] !== '') {
+    $appliedFilters[] = 'Created: ' . ($filters['date_from'] ?: 'earliest') . ' through ' . ($filters['date_to'] ?: 'latest');
+}
+$exportQuery = array_diff_key($filters, ['errors' => true, 'page' => true]);
+$exportQuery['scope'] = 'filtered';
+$filteredExportUrl = 'export_reports.php?' . http_build_query(array_filter($exportQuery, static fn($value) => $value !== '' && $value !== 0));
 
 $pageTitle = 'Reports | Queuezy';
 $pageHeading = 'Reports';
@@ -257,7 +247,7 @@ require_once '../includes/header.php';
 
     .financial-summary {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 18px;
         margin: 8px 0 24px;
     }
@@ -531,7 +521,7 @@ require_once '../includes/header.php';
         .report-header { padding: 0 0 12px !important; margin: 0 0 12px !important; }
         .report-kpis, .financial-summary { break-inside: avoid; }
         .report-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
-        .financial-summary { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+        .financial-summary { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
         .chart-panel, .report-data-section { break-inside: avoid; }
         .report-table-wrap { overflow: visible !important; }
         .report-table { width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
@@ -545,23 +535,74 @@ require_once '../includes/header.php';
         .report-table th, .report-table td { border-color: #cbd5e1 !important; }
     }
 </style>
+<link rel="stylesheet" href="../assets/css/queue-report.css">
 
 <div class="report-shell">
     <header class="report-header">
         <div>
             <p class="report-eyebrow">Operations</p>
             <h1>Reports</h1>
-            <p class="report-subtitle">A live overview of queue activity and revenue.</p>
-        </div>
-
-        <div class="report-tools">
-            <button class="export-btn" type="button" onclick="window.print()">
-                <i data-feather="printer"></i>
-                <span>Print / Save PDF</span>
-            </button>
+            <p class="report-subtitle">Review queue transactions, selected services, dates, and payments.</p>
         </div>
     </header>
 
+    <form class="report-filters" method="get" action="reports.php" aria-label="Filter queue transactions">
+        <label class="report-search" for="report-search">Search records
+            <input type="search" id="report-search" name="search" maxlength="120" value="<?= $escape($filters['search']) ?>" placeholder="Ticket, customer, service, or department">
+        </label>
+        <label for="report-department">Department
+            <select id="report-department" name="department_id">
+                <option value="">All departments</option>
+                <?php foreach ($report['departments'] ?? [] as $department): ?>
+                <option value="<?= (int)$department['id'] ?>" <?= $filters['department_id'] === (int)$department['id'] ? 'selected' : '' ?>><?= $escape($department['dept_name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label for="report-service">Selected service
+            <select id="report-service" name="service_id">
+                <option value="">All services</option>
+                <?php foreach ($report['services'] ?? [] as $service): ?>
+                <option value="<?= (int)$service['id'] ?>" data-department="<?= (int)$service['dept_id'] ?>" <?= $filters['service_id'] === (int)$service['id'] ? 'selected' : '' ?>><?= $escape($service['service_name'] . ' — ' . ($service['dept_name'] ?? 'Unassigned')) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label for="report-status">Queue status
+            <select id="report-status" name="status">
+                <option value="">All statuses</option>
+                <?php foreach (queueReportStatuses() as $value => $label): ?>
+                <option value="<?= $escape($value) ?>" <?= $filters['status'] === $value ? 'selected' : '' ?>><?= $escape($label) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label for="report-date-from">Created from
+            <input type="date" id="report-date-from" name="date_from" min="1000-01-01" max="9999-12-31" value="<?= $escape($filters['date_from']) ?>">
+        </label>
+        <label for="report-date-to">Created through
+            <input type="date" id="report-date-to" name="date_to" min="1000-01-01" max="9999-12-31" value="<?= $escape($filters['date_to']) ?>">
+        </label>
+        <label for="report-payment">Payment status
+            <select id="report-payment" name="payment_status">
+                <option value="">All payments</option>
+                <option value="pending" <?= $filters['payment_status'] === 'pending' ? 'selected' : '' ?>>Pending</option>
+                <option value="paid" <?= $filters['payment_status'] === 'paid' ? 'selected' : '' ?>>Paid</option>
+            </select>
+        </label>
+        <label for="report-sort">Sort by
+            <select id="report-sort" name="sort">
+                <?php foreach (queueReportSorts() as $value => $sort): ?>
+                <option value="<?= $escape($value) ?>" <?= $filters['sort'] === $value ? 'selected' : '' ?>><?= $escape($sort[0]) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <div class="report-filter-actions">
+            <button class="export-btn" type="submit">Apply filters</button>
+            <a class="report-reset" href="reports.php">Reset</a>
+        </div>
+    </form>
+    <?php if ($reportError !== '' || $filters['errors']): ?>
+    <div class="report-error" role="alert"><?= $escape($reportError !== '' ? $reportError : implode(' ', $filters['errors'])) ?></div>
+    <?php endif; ?>
+    <?php if ($reportError === '' && !$filters['errors']): ?>
     <section class="report-kpis" aria-label="Performance metrics">
         <article class="kpi-card">
             <div class="kpi-top">
@@ -571,7 +612,7 @@ require_once '../includes/header.php';
                 <strong><?= number_format($totalQueueCount) ?></strong>
                 <span>tickets</span>
             </div>
-            <p class="kpi-meta">all recorded tickets</p>
+            <p class="kpi-meta"><?= number_format($waitingQueueCount) ?> waiting · <?= number_format($servingQueueCount) ?> called / serving</p>
         </article>
 
         <article class="kpi-card completed-kpi">
@@ -582,7 +623,7 @@ require_once '../includes/header.php';
                 <strong><?= number_format($completedQueueCount) ?></strong>
                 <span>served</span>
             </div>
-            <p class="kpi-meta positive"><?= $totalQueueCount > 0 ? number_format($completedQueueCount / $totalQueueCount * 100, 1) : '0.0' ?>% of all tickets</p>
+            <p class="kpi-meta positive"><?= $totalQueueCount > 0 ? number_format($completedQueueCount / $totalQueueCount * 100, 1) : '0.0' ?>% of matching tickets</p>
         </article>
 
         <article class="kpi-card">
@@ -601,25 +642,23 @@ require_once '../includes/header.php';
                 <span class="kpi-label">No Show</span>
             </div>
             <div class="kpi-value">
-                <strong><?= number_format($waitingQueueCount) ?></strong>
-                <span>waiting</span>
+                <strong><?= number_format($noShowQueueCount) ?></strong>
+                <span>tickets</span>
             </div>
-            <p class="kpi-meta">currently in queue</p>
+            <p class="kpi-meta">marked as no show</p>
         </article>
     </section>
 
     <section class="financial-summary" aria-label="Financial summary">
         <div class="financial-summary__card">
-            <span class="financial-summary__label">Configured fees</span>
-            <div class="financial-summary__value"><?= number_format($totalConfiguredFees, 0) ?><small>services</small></div>
+            <span class="financial-summary__label">Collected income</span>
+            <div class="financial-summary__value">&#8369;<?= number_format((float)$summary['total_income'], 2) ?></div>
+            <p class="kpi-meta"><?= number_format((int)$summary['paid_count']) ?> paid payments</p>
         </div>
         <div class="financial-summary__card">
-            <span class="financial-summary__label">Listed fees</span>
-            <div class="financial-summary__value">₱<?= number_format($totalListedFees, 2) ?></div>
-        </div>
-        <div class="financial-summary__card">
-            <span class="financial-summary__label">Income</span>
-            <div class="financial-summary__value">₱<?= number_format($totalIncome, 2) ?></div>
+            <span class="financial-summary__label">Pending recorded payments</span>
+            <div class="financial-summary__value">&#8369;<?= number_format((float)$summary['pending_amount'], 2) ?></div>
+            <p class="kpi-meta"><?= number_format((int)$summary['pending_count']) ?> pending payments</p>
         </div>
     </section>
 
@@ -627,17 +666,17 @@ require_once '../includes/header.php';
         <div class="chart-head">
             <div>
                 <h2 id="department-report-title" class="chart-title">Queues by department</h2>
-                <p class="chart-subtitle">Ticket volume across all time</p>
+                <p class="chart-subtitle">Ticket volume for the applied filters</p>
             </div>
         </div>
-        <?php if ($departmentLabels): ?>
+        <?php if ($report['department_counts']): ?>
         <div class="department-bars">
-            <?php foreach ($departmentLabels as $index => $departmentLabel): ?>
-            <?php $barWidth = $maxDepartmentTickets > 0 ? ($departmentCounts[$index] / $maxDepartmentTickets) * 100 : 0; ?>
+            <?php foreach ($report['department_counts'] as $department): ?>
+            <?php $barWidth = $maxDepartmentTickets > 0 ? ((int)$department['ticket_count'] / $maxDepartmentTickets) * 100 : 0; ?>
             <div class="department-bar-row">
-                <span class="department-bar-name" title="<?= htmlspecialchars($departmentLabel) ?>"><?= htmlspecialchars($departmentLabel) ?></span>
+                <span class="department-bar-name" title="<?= $escape($department['dept_name']) ?>"><?= $escape($department['dept_name']) ?></span>
                 <span class="department-bar-track"><span class="department-bar-fill" style="width: <?= number_format($barWidth, 2, '.', '') ?>%"></span></span>
-                <strong class="department-bar-count"><?= number_format($departmentCounts[$index]) ?></strong>
+                <strong class="department-bar-count"><?= number_format((int)$department['ticket_count']) ?></strong>
             </div>
             <?php endforeach; ?>
         </div>
@@ -646,34 +685,83 @@ require_once '../includes/header.php';
         <?php endif; ?>
     </section>
 
-    <section class="report-data-section" aria-labelledby="active-queue-title">
+    <section class="report-data-section" aria-labelledby="queue-transactions-title">
         <div class="chart-head">
             <div>
-                <h2 id="active-queue-title" class="chart-title">Current queue</h2>
-                <p class="chart-subtitle">Latest waiting and serving tickets.</p>
+                <h2 id="queue-transactions-title" class="chart-title">Queue transactions</h2>
+            </div>
+            <div class="report-export-tools">
+                <a class="export-btn report-excel-btn" href="export_reports.php?scope=all" aria-label="Export all transactions to Excel">
+                    <i data-feather="download" aria-hidden="true"></i><span>Export Excel</span>
+                </a>
+                <?php if ($appliedFilters): ?>
+                <a class="export-btn" href="<?= $escape($filteredExportUrl) ?>">Export filtered</a>
+                <?php endif; ?>
             </div>
         </div>
         <div class="report-table-wrap">
             <table class="report-table">
-                <thead><tr><th>Ticket</th><th>Customer</th><th>Service</th><th>Status</th></tr></thead>
+                <thead><tr><th scope="col">Ticket</th><th scope="col">Customer</th><th scope="col">Selected service</th><th scope="col">Queue dates</th><th scope="col">Queue status</th><th scope="col">Payment details</th></tr></thead>
                 <tbody>
-                    <?php foreach ($queueExportRows as $row): ?>
+                    <?php foreach ($rows as $row): ?>
                     <tr>
-                        <td><?= htmlspecialchars($row['ticket_number']) ?></td>
-                        <td><?= htmlspecialchars($row['fullname']) ?></td>
-                        <td><?= htmlspecialchars($row['service_name']) ?></td>
-                        <td class="ticket-status"><?= htmlspecialchars(str_replace('_', ' ', $row['status'])) ?></td>
+                        <td><strong><?= $escape($row['ticket_number']) ?></strong><small>Queue #<?= (int)$row['id'] ?></small></td>
+                        <td><?= $escape($row['fullname'] ?? 'Unknown customer') ?></td>
+                        <td><strong><?= $escape($row['service_name'] ?? 'Unavailable service') ?></strong><small><?= $escape($row['dept_name'] ?? 'Unassigned') ?></small></td>
+                        <td class="report-dates">
+                            <span><b>Created</b> <?= $escape($dateLabel($row['created_at'])) ?></span>
+                            <span><b>Completed</b> <?= $escape($dateLabel($row['completed_at'])) ?></span>
+                        </td>
+                        <td><span class="report-badge" data-status="<?= $escape($row['status']) ?>"><?= $escape(queueReportStatuses()[$row['status']] ?? ucfirst(str_replace('_', ' ', $row['status']))) ?></span></td>
+                        <td class="report-payment">
+                            <strong>&#8369;<?= number_format((float)$row['amount'], 2) ?></strong>
+                            <span class="report-badge" data-status="<?= $escape($row['payment_status']) ?>"><?= $row['payment_status'] === 'paid' ? 'Paid' : 'Pending' ?></span>
+                            <?php if ($row['payment_id'] === null): ?>
+                            <small>Current fee estimate · No payment recorded</small>
+                            <?php else: ?>
+                            <small>Payment #<?= (int)$row['payment_id'] ?></small>
+                            <?php endif; ?>
+                            <small>Paid at: <?= $escape($dateLabel($row['paid_at'])) ?></small>
+                        </td>
                     </tr>
                     <?php endforeach; ?>
-                    <?php if (!$queueExportRows): ?><tr><td colspan="4" class="report-empty">No active tickets.</td></tr><?php endif; ?>
+                    <?php if (!$rows): ?><tr><td colspan="6" class="report-empty">No transactions match these filters. Adjust the filters or reset to view all records.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </div>
+        <?php if ($pages > 1): ?>
+        <nav class="report-pagination" aria-label="Transaction pages">
+            <div>
+                <?php if ($page > 1): ?><a class="export-btn" href="<?= $escape($pageUrl($page - 1)) ?>">Previous</a><?php endif; ?>
+                <?php if ($page < $pages): ?><a class="export-btn" href="<?= $escape($pageUrl($page + 1)) ?>">Next</a><?php endif; ?>
+            </div>
+        </nav>
+        <?php endif; ?>
     </section>
+    <?php endif; ?>
 </div>
 
 <script>
-feather.replace();
+if (typeof feather !== 'undefined') feather.replace();
+
+const departmentFilter = document.getElementById('report-department');
+const serviceFilter = document.getElementById('report-service');
+const updateServiceChoices = () => {
+    const department = departmentFilter.value;
+    Array.from(serviceFilter.options).forEach((option) => {
+        const excluded = Boolean(department && option.value && option.dataset.department !== department);
+        option.hidden = excluded;
+        option.disabled = excluded;
+    });
+};
+departmentFilter.addEventListener('change', () => {
+    const selected = serviceFilter.selectedOptions[0];
+    if (departmentFilter.value && selected?.value && selected.dataset.department !== departmentFilter.value) {
+        serviceFilter.value = '';
+    }
+    updateServiceChoices();
+});
+updateServiceChoices();
 
 const queueMenu = document.getElementById('queueMenu');
 if (queueMenu) {
