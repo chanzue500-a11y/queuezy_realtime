@@ -1,0 +1,11 @@
+.paginated-table tr[hidden] { display: none !important; }
+.table-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 20px; border-top: 1px solid #334155; background: #1e293b; border-radius: 0 0 12px 12px; }
+.table-pagination p { margin: 0; color: #cbd5e1; font-size: 12px; }
+.table-pagination-controls, .table-page-numbers { display: flex; align-items: center; gap: 6px; }
+.table-pagination button { min-width: 36px; min-height: 36px; padding: 7px 10px; border: 1px solid #475569; border-radius: 8px; background: transparent; color: #e2e8f0; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease; }
+.table-pagination button:hover:not(:disabled) { background: #312e81; border-color: #a78bfa; }
+.table-pagination button[aria-current="page"] { background: #7c3aed; border-color: #8b5cf6; color: #ffffff; }
+.table-pagination button:disabled { opacity: 0.4; cursor: default; }
+.table-pagination button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 3px; }
+.table-page-numbers > span { color: #94a3b8; padding: 0 2px; }
+@media (max-width: 640px) { .table-pagination { padding: 14px 12px; } .table-pagination-controls { flex-wrap: wrap; } }

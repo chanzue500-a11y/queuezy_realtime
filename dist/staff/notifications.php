@@ -1,19 +1,6 @@
 <?php
 require_once '../database/db.php';
 
-$callingTicket = null;
-$waitingCount = 0;
-if ($conn) {
-    $callingResult = $conn->query("SELECT q.ticket_number, d.dept_name FROM queue q LEFT JOIN services s ON q.service_id = s.id LEFT JOIN departments d ON s.dept_id = d.id WHERE q.status IN ('called', 'now_serving') ORDER BY q.id DESC LIMIT 1");
-    if ($callingResult) {
-        $callingTicket = $callingResult->fetch_assoc();
-    }
-    $waitingResult = $conn->query("SELECT COUNT(*) AS total FROM queue WHERE status = 'waiting'");
-    if ($waitingResult) {
-        $waitingCount = (int)($waitingResult->fetch_assoc()['total'] ?? 0);
-    }
-}
-
 $pageTitle = 'Notifications | Queuezy Admin';
 $pageHeading = 'Notifications';
 require_once '../includes/header.php';
@@ -48,13 +35,8 @@ require_once '../includes/header.php';
                 <i class="fa-solid fa-bullhorn text-xl" aria-hidden="true"></i>
             </div>
             <div>
-                <h2 class="text-lg font-black text-slate-900">Current call</h2>
-                <?php if ($callingTicket): ?>
-                    <p id="adminPageNotificationContent" class="mt-2 text-sm text-slate-600"><strong>Ticket #<?= htmlspecialchars($callingTicket['ticket_number']) ?> is now calling.</strong> Please serve the customer.</p>
-                    <p class="mt-1 text-xs text-slate-500"><?= htmlspecialchars($callingTicket['dept_name'] ?? 'Queue desk') ?></p>
-                <?php else: ?>
-                    <p id="adminPageNotificationContent" class="mt-2 text-sm text-slate-600">No ticket is currently being called.</p>
-                <?php endif; ?>
+                <h2 class="text-lg font-black text-slate-900">Latest active ticket</h2>
+                <p data-notification-field="call_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['call_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
             </div>
         </div>
     </section>
@@ -66,7 +48,7 @@ require_once '../includes/header.php';
             </div>
             <div>
                 <h2 class="text-lg font-black text-slate-900">Waiting queue</h2>
-                <p class="mt-2 text-sm text-slate-600"><strong><?= $waitingCount === 1 ? '1 customer is waiting to be served.' : $waitingCount . ' customers are waiting to be served.' ?></strong></p>
+                <p data-notification-field="waiting_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['waiting_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
                 <?php if (($_SESSION['user_role'] ?? '') === 'staff'): ?>
                     <a href="monitor.php" class="mt-3 inline-flex text-sm font-bold text-purple-600 hover:text-purple-700">Open queue monitor</a>
                 <?php endif; ?>

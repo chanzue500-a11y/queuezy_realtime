@@ -208,7 +208,22 @@ function queueReportData(mysqli $connection, array $filters): array
         COALESCE(SUM(qp.status = 'pending'), 0) AS pending_count,
         COALESCE(SUM(CASE WHEN qp.status = 'pending' THEN qp.amount ELSE 0 END), 0) AS pending_amount,
         COALESCE(SUM(qp.id IS NULL), 0) AS unrecorded_count" . $joins . $where, $types, $parameters)[0];
-    $data['department_counts'] = queueReportQuery($connection, "SELECT COALESCE(d.dept_name, 'Unassigned') AS dept_name, COUNT(*) AS ticket_count" . $joins . $where . ' GROUP BY d.id, d.dept_name ORDER BY ticket_count DESC, dept_name', $types, $parameters);
+    $departmentWhere = $where . ($where === '' ? ' WHERE ' : ' AND ') . "q.status = 'completed'";
+    $matchingDepartmentCounts = queueReportQuery($connection, "SELECT d.id AS dept_id, COALESCE(d.dept_name, 'Unassigned') AS dept_name, COUNT(*) AS ticket_count" . $joins . $departmentWhere . ' GROUP BY d.id, d.dept_name', $types, $parameters);
+    $countsByDepartment = array_column($matchingDepartmentCounts, 'ticket_count', 'dept_id');
+    // Keep every configured department visible, even without services or matching tickets.
+    foreach ($data['departments'] as $department) {
+        $data['department_counts'][] = [
+            'dept_id' => (int)$department['id'],
+            'dept_name' => $department['dept_name'],
+            'ticket_count' => (int)($countsByDepartment[$department['id']] ?? 0),
+        ];
+    }
+    foreach ($matchingDepartmentCounts as $department) {
+        if ($department['dept_id'] === null) $data['department_counts'][] = $department;
+    }
+    usort($data['department_counts'], static fn($a, $b) =>
+        (int)$b['ticket_count'] <=> (int)$a['ticket_count'] ?: strcasecmp($a['dept_name'], $b['dept_name']));
     $data['pages'] = max(1, (int)ceil((int)$data['summary']['total_count'] / $data['page_size']));
     $data['page'] = min($filters['page'], $data['pages']);
     $offset = ($data['page'] - 1) * $data['page_size'];

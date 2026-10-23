@@ -19,30 +19,11 @@ $staffProfilePath = 'profile.php';
 require_once __DIR__ . '/profile_photo.php';
 $headerProfilePhotoFilename = getUserProfilePhotoFilename((int)$_SESSION['user_id']);
 $headerProfilePhotoUrl = $headerProfilePhotoFilename ? '../uploads/profile/' . rawurlencode($headerProfilePhotoFilename) : '';
-$adminNowServing = null;
-$adminWaitingCount = 0;
-$adminLatestFeeUpdate = '';
-$adminLatestCustomer = '';
-if (isset($conn) && $conn) {
-    $adminNowServingResult = $conn->query("SELECT ticket_number FROM queue WHERE status IN ('called', 'now_serving') ORDER BY id DESC LIMIT 1");
-    if ($adminNowServingResult) {
-        $adminNowServing = $adminNowServingResult->fetch_assoc()['ticket_number'] ?? null;
-    }
-    $adminWaitingResult = $conn->query("SELECT COUNT(*) AS total FROM queue WHERE status = 'waiting'");
-    if ($adminWaitingResult) {
-        $adminWaitingCount = (int)($adminWaitingResult->fetch_assoc()['total'] ?? 0);
-    }
-    $adminFeeUpdateResult = $conn->query("SELECT MAX(updated_at) AS latest_update FROM service_fees");
-    if ($adminFeeUpdateResult && $adminFeeUpdateRow = $adminFeeUpdateResult->fetch_assoc()) {
-        $adminLatestFeeUpdate = (string)($adminFeeUpdateRow['latest_update'] ?? '');
-    }
-    $adminCustomerResult = $conn->query("SELECT MAX(created_at) AS latest_customer FROM users WHERE role = 'customer'");
-    if ($adminCustomerResult && $adminCustomerRow = $adminCustomerResult->fetch_assoc()) {
-        $adminLatestCustomer = (string)($adminCustomerRow['latest_customer'] ?? '');
-    }
-}
-$adminNotificationKey = ($adminNowServing ?? '') . '|' . $adminWaitingCount . '|' . $adminLatestFeeUpdate . '|' . $adminLatestCustomer;
-$hasAdminNotification = $adminNowServing || $adminWaitingCount > 0 || $adminLatestFeeUpdate !== '' || $adminLatestCustomer !== '';
+require_once __DIR__ . '/workspace_notifications.php';
+$workspaceNotifications = workspaceNotificationSnapshot($conn ?? null, $_SESSION['user_role']);
+$adminWaitingCount = $workspaceNotifications['waiting'];
+$adminNotificationKey = $workspaceNotifications['key'];
+$hasAdminNotification = $workspaceNotifications['has_activity'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -72,6 +53,7 @@ $hasAdminNotification = $adminNowServing || $adminWaitingCount > 0 || $adminLate
         body.dark-mode .admin-notification-panel { background: #1e293b; border-color: #475569; }
         body.dark-mode .admin-notification-panel h3,
         body.dark-mode .admin-notification-panel strong { color: #f8fafc; }
+        body.dark-mode .admin-notification-panel p { color: #cbd5e1; }
         @media (prefers-reduced-motion: reduce) { .admin-notification-panel { transition: none; } .queue-content { animation: none; } }
     </style>
     <script src="../assets/js/feather.min.js"></script>
@@ -86,6 +68,7 @@ $hasAdminNotification = $adminNowServing || $adminWaitingCount > 0 || $adminLate
 <body class="queue-app dark-mode">
 <div class="queue-layout">
     <aside class="queue-sidebar" id="queueSidebar">
+        <button class="queue-sidebar-toggle queue-sidebar-close" id="queueSidebarClose" type="button" aria-label="Close sidebar" aria-controls="queueSidebar"><span aria-hidden="true">&lt;</span></button>
         <div class="queue-brand-row">
             <div class="queue-brand" role="img" aria-label="Queuezy"><img class="queue-brand-logo queue-brand-logo--processing" id="queueBrandLogo" src="../assets/images/mascot.png" alt="" width="64" height="64" style="width: 64px !important; height: 64px !important; max-width: 64px; max-height: 64px;"><span class="queue-brand-name">QUEUE<span>ZY</span></span></div>
         </div>
@@ -159,48 +142,62 @@ $hasAdminNotification = $adminNowServing || $adminWaitingCount > 0 || $adminLate
             </div>
         </div>
     </aside>
+    <button class="queue-sidebar-backdrop" id="queueSidebarBackdrop" type="button" aria-label="Close sidebar" tabindex="-1" hidden></button>
     <script>if (typeof feather !== 'undefined') feather.replace();</script>
     <main class="queue-main">
         <header class="queue-topbar">
+            <button class="queue-menu" id="queueSidebarOpen" type="button" aria-label="Open sidebar" aria-controls="queueSidebar" aria-expanded="false"><span aria-hidden="true">&gt;</span></button>
             <div class="queue-topbar__actions">
                 <div class="admin-notification-wrap">
                     <button class="queue-icon-button" id="adminNotificationButton" type="button" aria-label="Notifications" aria-expanded="false"><i class="fa-solid fa-bell"></i><?php if ($hasAdminNotification): ?><b id="adminTopNotificationDot"></b><?php endif; ?></button>
                     <div class="admin-notification-panel" id="adminNotificationPanel" role="status" aria-live="polite">
                         <h3>Notifications</h3>
-                        <?php if ($isAdmin && $adminLatestCustomer !== ''): ?>
-                            <p id="adminNotificationContent"><strong>New customer activity detected.</strong> Open Notifications to review the latest admin updates.</p>
-                        <?php elseif ($isAdmin): ?>
-                            <p id="adminNotificationContent"><strong><?= $adminWaitingCount ?> customer<?= $adminWaitingCount === 1 ? '' : 's' ?> waiting.</strong> Open Notifications to review the queue overview.</p>
-                        <?php elseif ($adminNowServing): ?>
-                            <p id="adminNotificationContent"><strong>Ticket #<?= htmlspecialchars($adminNowServing) ?> is now calling.</strong> Please serve the customer.</p>
-                        <?php elseif ($adminWaitingCount > 0): ?>
-                            <p id="adminNotificationContent"><strong><?= $adminWaitingCount ?> ticket<?= $adminWaitingCount === 1 ? '' : 's' ?> waiting.</strong> Open Queues to call the next customer.</p>
-                        <?php else: ?>
-                            <p id="adminNotificationContent">No new queue notifications.</p>
-                        <?php endif; ?>
+                        <p id="adminNotificationContent"><?= htmlspecialchars($workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
                     </div>
                 </div>
-                <div class="queue-user" role="group" aria-label="Current user">
+                <a class="queue-user" href="<?= htmlspecialchars($staffProfilePath, ENT_QUOTES) ?>" aria-label="Open Settings" title="Settings">
                     <span class="profile-icon" aria-label="Profile">
                         <?php if ($headerProfilePhotoUrl): ?><img src="<?= htmlspecialchars($headerProfilePhotoUrl, ENT_QUOTES) ?>" alt="">
                         <?php else: ?><i class="fa-solid fa-user"></i><?php endif; ?>
                     </span>
                     <span><strong><?= htmlspecialchars($_SESSION['user_name'] ?? 'Admin') ?></strong><small><?= htmlspecialchars(ucfirst($_SESSION['user_role'] ?? 'staff')) ?></small></span>
-                </div>
+                </a>
             </div>
             <script>
                 (() => {
                     const button = document.getElementById('adminNotificationButton');
                     const panel = document.getElementById('adminNotificationPanel');
                     const sidebarLink = document.getElementById('adminSidebarNotificationLink');
-                    const notificationKey = sidebarLink?.dataset.notificationKey || '';
+                    let notificationKey = sidebarLink?.dataset.notificationKey || '';
+                    let hasActivity = <?= $hasAdminNotification ? 'true' : 'false' ?>;
+                    const storageKey = <?= json_encode('queuezy-viewed-notification-' . ($_SESSION['user_role'] ?? '') . '-' . (int)$_SESSION['user_id']) ?>;
+                    const isNotificationsPage = <?= in_array($currentPage, ['notifications.php', 'notification.php'], true) ? 'true' : 'false' ?>;
+                    const readViewedKey = () => { try { return localStorage.getItem(storageKey); } catch { return ''; } };
+                    const syncNotificationBadge = () => {
+                        const unread = hasActivity && notificationKey && notificationKey !== readViewedKey();
+                        if (!unread) {
+                            sidebarLink?.querySelector('em')?.remove();
+                            document.getElementById('adminTopNotificationDot')?.remove();
+                            return;
+                        }
+                        if (sidebarLink && !sidebarLink.querySelector('em')) {
+                            const badge = document.createElement('em');
+                            badge.textContent = '1';
+                            sidebarLink.appendChild(badge);
+                        }
+                        if (button && !document.getElementById('adminTopNotificationDot')) {
+                            const dot = document.createElement('b');
+                            dot.id = 'adminTopNotificationDot';
+                            button.appendChild(dot);
+                        }
+                    };
                     const clearNotificationBadge = () => {
                         if (!notificationKey) return;
-                        localStorage.setItem('queuezy-admin-viewed-notification', notificationKey);
+                        try { localStorage.setItem(storageKey, notificationKey); } catch {}
                         sidebarLink?.querySelector('em')?.remove();
                         document.getElementById('adminTopNotificationDot')?.remove();
                     };
-                    if (notificationKey && notificationKey === localStorage.getItem('queuezy-admin-viewed-notification')) clearNotificationBadge();
+                    syncNotificationBadge();
                     button?.addEventListener('click', (event) => {
                         event.stopPropagation();
                         clearNotificationBadge();
@@ -214,23 +211,33 @@ $hasAdminNotification = $adminNowServing || $adminWaitingCount > 0 || $adminLate
                         }
                     });
                     sidebarLink?.addEventListener('click', clearNotificationBadge);
-                    if (<?= in_array($currentPage, ['notifications.php', 'notification.php'], true) ? 'true' : 'false' ?>) clearNotificationBadge();
-                    const updateAdminNotifications = () => {
-                        fetch('../api/admin_notification.php', { cache: 'no-store' })
-                            .then((response) => response.ok ? response.json() : null)
-                            .then((data) => {
-                                if (!data?.ok) return;
-                                const content = data.ticket
-                                    ? `<strong>Ticket #${data.ticket} is now calling.</strong> Please serve the customer.`
-                                    : data.waiting > 0
-                                        ? `<strong>${data.waiting} ticket${data.waiting === 1 ? '' : 's'} waiting.</strong> Open Queues to call the next customer.`
-                                        : 'No new queue notifications.';
-                                document.querySelectorAll('#adminNotificationContent, #adminPageNotificationContent').forEach((element) => { element.innerHTML = content; });
-                            })
-                            .catch(() => {});
+                    if (isNotificationsPage) clearNotificationBadge();
+                    const updateAdminNotifications = async () => {
+                        try {
+                            const response = await fetch('../api/admin_notification.php', { cache: 'no-store' });
+                            if (!response.ok) throw new Error('Notifications unavailable');
+                            const data = await response.json();
+                            if (!data?.ok) throw new Error('Notifications unavailable');
+                            document.querySelectorAll('[data-notification-field]').forEach((element) => {
+                                const value = data[element.dataset.notificationField];
+                                if (typeof value === 'string') element.textContent = value;
+                            });
+                            document.getElementById('adminNotificationContent').textContent = data.message;
+                            notificationKey = data.key;
+                            hasActivity = data.has_activity;
+                            if (sidebarLink) sidebarLink.dataset.notificationKey = notificationKey;
+                            if (isNotificationsPage || panel?.classList.contains('is-visible')) clearNotificationBadge();
+                            syncNotificationBadge();
+                        } catch {
+                            document.getElementById('adminNotificationContent').textContent = 'Notifications are temporarily unavailable. Retrying…';
+                            document.querySelectorAll('[data-notification-field]').forEach((element) => {
+                                element.textContent = 'Updates unavailable. Retrying…';
+                            });
+                        } finally {
+                            window.setTimeout(updateAdminNotifications, 5000);
+                        }
                     };
                     updateAdminNotifications();
-                    window.setInterval(updateAdminNotifications, 5000);
                 })();
             </script>
         </header>

@@ -226,6 +226,21 @@ require_once '../includes/header.php';
     box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.1);
     overflow: hidden;
   }
+  #monitorTable tr[hidden] { display: none !important; }
+  .monitor-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 20px; border-top: 1px solid #e2e8f0; }
+  .monitor-pagination p { margin: 0; color: #64748b; font-size: 12px; }
+  .monitor-pagination-controls, .monitor-page-numbers { display: flex; align-items: center; gap: 6px; }
+  .monitor-pagination button { min-width: 36px; min-height: 36px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: transparent; color: #475569; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease; }
+  .monitor-pagination button:hover:not(:disabled) { background: #ede9fe; border-color: #a78bfa; color: #6d28d9; }
+  .monitor-pagination button[aria-current="page"] { background: #7c3aed; border-color: #8b5cf6; color: #ffffff; }
+  .monitor-pagination button:disabled { opacity: 0.4; cursor: default; }
+  .monitor-pagination button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 3px; }
+  .monitor-page-numbers > span { color: #94a3b8; padding: 0 2px; }
+  :is(html.dark-mode, body.dark-mode) .monitor-pagination { border-color: #334155; }
+  :is(html.dark-mode, body.dark-mode) .monitor-pagination p { color: #cbd5e1; }
+  :is(html.dark-mode, body.dark-mode) .monitor-pagination button { border-color: #475569; color: #e2e8f0; }
+  :is(html.dark-mode, body.dark-mode) .monitor-pagination button:hover:not(:disabled) { background: #312e81; border-color: #a78bfa; }
+  @media (max-width: 640px) { .monitor-pagination { padding: 14px 12px; } .monitor-pagination-controls { flex-wrap: wrap; } }
   .monitor-table {
     width: 100%;
     min-width: 0;
@@ -473,7 +488,7 @@ require_once '../includes/header.php';
 <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm mb-8 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
   <div class="relative flex-1 max-w-md md:ml-auto">
     <i data-feather="search" class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-    <input type="text" id="queueSearchInput" onkeyup="filterQueueTable()" placeholder="Search ticket number, customer, or service..." class="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-purple-500 focus:bg-white transition">
+    <input type="search" id="queueSearchInput" aria-label="Search queue tickets" placeholder="Search ticket number, customer, or service..." class="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-purple-500 focus:bg-white transition">
   </div>
 </div>
 
@@ -504,8 +519,8 @@ require_once '../includes/header.php';
         </tr>
       </thead>
       <tbody>
-        <?php foreach ($queueList as $q): ?>
-        <tr class="queue-row">
+        <?php foreach ($queueList as $queueIndex => $q): ?>
+        <tr class="queue-row" <?= $queueIndex >= 10 ? 'hidden' : '' ?>>
           <td>
             <span class="font-black text-purple-700 text-base">#<?= htmlspecialchars($q['ticket_number']) ?></span>
           </td>
@@ -566,24 +581,25 @@ require_once '../includes/header.php';
           </td>
         </tr>
         <?php endforeach; ?>
+        <tr id="queueSearchEmpty" hidden><td colspan="9" style="text-align: center; padding: 32px;">No tickets match your search.</td></tr>
       </tbody>
     </table>
   </div>
+  <nav class="monitor-pagination" aria-label="Queue table pagination">
+    <p id="queuePageStatus" role="status" aria-live="polite">Showing 1–<?= min(10, count($queueList)) ?> of <?= count($queueList) ?> tickets</p>
+    <div class="monitor-pagination-controls">
+      <button id="queuePreviousPage" type="button" aria-controls="monitorTable" disabled>&lt; Previous</button>
+      <div id="queuePageNumbers" class="monitor-page-numbers"></div>
+      <button id="queueNextPage" type="button" aria-controls="monitorTable" <?= count($queueList) <= 10 ? 'disabled' : '' ?>>Next &gt;</button>
+    </div>
+  </nav>
 </div>
 <?php endif; ?>
 
 <div class="toast-container" id="toastBox"></div>
+<script src="../assets/js/queue-table-pagination.js"></script>
 
 <script>
-
-  function filterQueueTable() {
-    const q = document.getElementById('queueSearchInput').value.toLowerCase();
-    const rows = document.querySelectorAll('#monitorTable tbody tr');
-    rows.forEach(r => {
-      const text = r.innerText.toLowerCase();
-      r.style.display = text.includes(q) ? '' : 'none';
-    });
-  }
 
   function formatTicketForSpeech(rawTicket) {
     if (!rawTicket) return '45';

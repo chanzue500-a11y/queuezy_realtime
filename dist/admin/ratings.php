@@ -68,7 +68,7 @@ if ($conn) {
 
     if ($ratingsError === '') {
         try {
-            $ratingRows = iterator_to_array(ratingsReportRows($conn, $ratingFilters, 500), false);
+            $ratingRows = iterator_to_array(ratingsReportRows($conn, $ratingFilters), false);
         } catch (Throwable $error) {
             error_log('Ratings report failed: ' . $error->getMessage());
             $ratingsError = 'Unable to load ratings. Please try again.';
@@ -144,6 +144,7 @@ require_once '../includes/header.php';
     .ratings-filters input { flex: 1; min-width: 0; }
   }
 </style>
+<link rel="stylesheet" href="../assets/css/table-pagination.css">
 
 <div class="ratings-page">
   <header class="ratings-heading">
@@ -192,7 +193,7 @@ require_once '../includes/header.php';
   <?php if ($ratingsError !== ''): ?><p class="ratings-error" role="alert"><?= htmlspecialchars($ratingsError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p><?php endif; ?>
 
   <div class="ratings-table-wrap">
-    <table class="ratings-table">
+    <table class="ratings-table paginated-table" id="ratingsTable">
       <thead>
         <tr>
           <th>Ticket / Customer</th>
@@ -205,10 +206,10 @@ require_once '../includes/header.php';
         </tr>
       </thead>
       <tbody id="ratingsTableBody">
-        <?php foreach ($ratingRows as $ratingRow): ?>
+        <?php foreach ($ratingRows as $ratingIndex => $ratingRow): ?>
         <?php $ratingScore = (int)($ratingRow['rating'] ?? 0); ?>
         <?php $feedback = trim((string)($ratingRow['feedback'] ?? '')); ?>
-        <tr>
+        <tr class="rating-row" <?= $ratingIndex >= 10 ? 'hidden' : '' ?>>
           <td>
             <strong><?= htmlspecialchars($ratingRow['ticket_number'] ?? 'Ticket unavailable') ?></strong>
             <div><?= htmlspecialchars($ratingRow['fullname'] ?? 'Customer unavailable') ?></div>
@@ -233,24 +234,22 @@ require_once '../includes/header.php';
           </td>
         </tr>
         <?php endforeach; ?>
-        <?php if (!$ratingRows): ?>
-        <tr><td colspan="7" class="ratings-empty">No customer ratings match this filter.</td></tr>
-        <?php endif; ?>
+        <tr id="ratingsSearchEmpty" <?= $ratingRows ? 'hidden' : '' ?>><td colspan="7" class="ratings-empty">No customer ratings match this filter.</td></tr>
       </tbody>
     </table>
   </div>
+  <?php if ($ratingRows): ?>
+  <nav class="table-pagination" aria-label="Ratings table pagination">
+    <p id="ratingsPageStatus" role="status" aria-live="polite">Showing 1–<?= min(10, count($ratingRows)) ?> of <?= count($ratingRows) ?> ratings</p>
+    <div class="table-pagination-controls">
+      <button id="ratingsPreviousPage" type="button" aria-controls="ratingsTable" disabled>&lt; Previous</button>
+      <div id="ratingsPageNumbers" class="table-page-numbers"></div>
+      <button id="ratingsNextPage" type="button" aria-controls="ratingsTable" <?= count($ratingRows) <= 10 ? 'disabled' : '' ?>>Next &gt;</button>
+    </div>
+  </nav>
+  <?php endif; ?>
 </div>
 
-<script>
-  const ratingSearch = document.getElementById('ratingSearch');
-  const ratingRows = [...document.querySelectorAll('#ratingsTableBody tr')].filter((row) => row.querySelector('.rating-score'));
-  ratingSearch?.addEventListener('input', () => {
-    const query = ratingSearch.value.trim().toLowerCase();
-    ratingRows.forEach((row) => {
-      const isVisible = row.textContent.toLowerCase().includes(query);
-      row.hidden = !isVisible;
-    });
-  });
-</script>
+<?php if ($ratingRows): ?><script src="../assets/js/queue-table-pagination.js"></script><?php endif; ?>
 
 <?php require_once '../includes/footer.php'; ?>

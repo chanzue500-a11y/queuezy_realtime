@@ -22,7 +22,9 @@ if (!$conn) {
     }
 }
 $departmentCounts = array_column($report['department_counts'] ?? [], 'ticket_count');
-$maxDepartmentTickets = max($departmentCounts ?: [0]);
+$totalDepartmentTickets = array_sum($departmentCounts);
+$departmentTickStep = max(1, (int)ceil(max($departmentCounts ?: [0]) / 4));
+$departmentAxisMax = $departmentTickStep * 4;
 $rows = $report['rows'] ?? [];
 $page = $report['page'] ?? 1;
 $pages = $report['pages'] ?? 1;
@@ -454,12 +456,22 @@ require_once '../includes/header.php';
     .chart-title { color: #f8fafc; font-size: 15px; font-weight: 800; }
     .chart-subtitle { margin-top: 4px; color: #94a3b8; font-size: 12px; }
     .report-data-section { margin-top: 20px; }
-    .department-bars { display: grid; gap: 13px; padding: 18px; }
-    .department-bar-row { display: grid; grid-template-columns: minmax(110px, 220px) minmax(0, 1fr) 48px; align-items: center; gap: 12px; }
-    .department-bar-name { overflow: hidden; color: #cbd5e1; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .department-bar-track { height: 8px; overflow: hidden; border-radius: 99px; background: #334155; }
-    .department-bar-fill { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: #34d399; }
-    .department-bar-count { color: #f8fafc; font-size: 12px; font-weight: 700; text-align: right; }
+    .department-volume-summary { flex-shrink: 0; padding: 7px 11px; border: 1px solid #475569; border-radius: 9px; color: #e2e8f0; font-size: 12px; font-weight: 700; }
+    .department-chart-scroll { padding: 22px 24px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #64748b #1e293b; }
+    .department-chart { min-width: var(--chart-min-width); }
+    .department-chart-axis-title { margin: 0 0 28px; color: #94a3b8; font-size: 11px; }
+    .department-chart-body { display: grid; grid-template-columns: 40px minmax(0, 1fr); }
+    .department-chart-y-axis { height: 240px; position: relative; color: #94a3b8; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .department-chart-y-axis span { position: absolute; right: 12px; transform: translateY(50%); }
+    .department-chart-columns { display: grid; grid-template-columns: repeat(var(--departments), minmax(0, 1fr)); list-style: none; margin: 0; padding: 0; position: relative; }
+    .department-chart-columns::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 240px; border-left: 1px solid #64748b; border-bottom: 1px solid #64748b; background-image: linear-gradient(to top, #334155 1px, transparent 1px); background-size: 100% 25%; pointer-events: none; }
+    .department-chart-column { min-width: 0; position: relative; }
+    .department-chart-plot { height: 240px; display: flex; align-items: flex-end; justify-content: center; }
+    .department-chart-bar { display: block; position: relative; width: 52%; max-width: 64px; background: #a78bfa; border-radius: 3px 3px 0 0; }
+    .department-volume-count { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); color: #f8fafc; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .department-volume-name { display: block; padding: 12px 8px 0; color: #cbd5e1; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; text-align: center; }
+    .department-chart-x-title { margin: 18px 0 0 40px; color: #94a3b8; font-size: 11px; text-align: center; }
+    .department-volume-head { gap: 12px; flex-wrap: wrap; }
     .department-empty { padding: 20px 18px; color: #94a3b8; font-size: 13px; }
     .report-table-wrap { overflow-x: auto; border: 1px solid #334155; border-radius: 8px; background: #1e293b; }
     .report-table { width: 100%; min-width: 620px; border-collapse: collapse; text-align: left; }
@@ -476,7 +488,7 @@ require_once '../includes/header.php';
         .financial-summary { grid-template-columns: 1fr; }
         .financial-summary__card { border-right: 0; border-bottom: 1px solid #334155; }
         .financial-summary__card:last-child { border-bottom: 0; }
-        .department-bar-row { grid-template-columns: minmax(90px, 135px) minmax(0, 1fr) 34px; gap: 8px; }
+        .department-chart-scroll { padding: 18px 12px; }
     }
     @media print {
         @page { size: landscape; margin: 12mm; }
@@ -524,7 +536,9 @@ require_once '../includes/header.php';
         .report-kpis, .financial-summary, .kpi-card, .financial-summary__card, .chart-panel, .report-table-wrap { background: #fff !important; border-color: #cbd5e1 !important; box-shadow: none !important; }
         .kpi-card, .financial-summary__card { border-right: 1px solid #cbd5e1 !important; }
         .kpi-card:last-child, .financial-summary__card:last-child { border-right: 0 !important; }
-        .kpi-label, .kpi-meta, .financial-summary__label, .department-bar-name, .chart-subtitle, .report-table td { color: #334155 !important; }
+        .kpi-label, .kpi-meta, .financial-summary__label, .department-volume-name, .department-chart-y-axis, .department-chart-axis-title, .department-chart-x-title, .department-volume-summary, .department-volume-count, .chart-subtitle, .report-table td { color: #334155 !important; }
+        .department-chart-scroll { overflow: visible; }
+        .department-chart { min-width: 0; }
         .report-table th, .report-table td { border-color: #cbd5e1 !important; }
     }
 </style>
@@ -597,22 +611,37 @@ require_once '../includes/header.php';
     <?php endif; ?>
     <?php if ($reportError === '' && !$filters['errors']): ?>
     <section class="chart-panel" aria-labelledby="department-report-title">
-        <div class="chart-head">
+        <div class="chart-head department-volume-head">
             <div>
-                <h2 id="department-report-title" class="chart-title">Queues by department</h2>
-                <p class="chart-subtitle">Ticket volume for the applied filters</p>
+                <h2 id="department-report-title" class="chart-title">Completed tickets by department</h2>
+            
             </div>
+            <span class="department-volume-summary"><?= number_format(count($report['departments'])) ?> departments · <?= number_format($totalDepartmentTickets) ?> completed <?= $totalDepartmentTickets === 1 ? 'ticket' : 'tickets' ?></span>
         </div>
         <?php if ($report['department_counts']): ?>
-        <div class="department-bars">
+        <div class="department-chart-scroll" tabindex="0" role="region" aria-label="Department bar graph; scroll horizontally to see all departments">
+        <div class="department-chart" role="group" aria-labelledby="department-report-title" aria-describedby="department-volume-description" style="--departments: <?= count($report['department_counts']) ?>; --chart-min-width: <?= max(480, count($report['department_counts']) * 90 + 40) ?>px;">
+            <p class="department-chart-axis-title" aria-hidden="true">Completed tickets</p>
+            <div class="department-chart-body">
+                <div class="department-chart-y-axis" aria-hidden="true">
+                    <?php for ($tick = 0; $tick <= 4; $tick++): ?><span style="bottom: <?= $tick * 25 ?>%;"><?= number_format($tick * $departmentTickStep) ?></span><?php endfor; ?>
+                </div>
+                <ul class="department-chart-columns">
             <?php foreach ($report['department_counts'] as $department): ?>
-            <?php $barWidth = $maxDepartmentTickets > 0 ? ((int)$department['ticket_count'] / $maxDepartmentTickets) * 100 : 0; ?>
-            <div class="department-bar-row">
-                <span class="department-bar-name" title="<?= $escape($department['dept_name']) ?>"><?= $escape($department['dept_name']) ?></span>
-                <span class="department-bar-track"><span class="department-bar-fill" style="width: <?= number_format($barWidth, 2, '.', '') ?>%"></span></span>
-                <strong class="department-bar-count"><?= number_format((int)$department['ticket_count']) ?></strong>
-            </div>
+            <?php $barHeight = ((int)$department['ticket_count'] / $departmentAxisMax) * 100; ?>
+            <li class="department-chart-column">
+                <div class="department-chart-plot">
+                    <span class="department-chart-bar" style="height: <?= number_format($barHeight, 2, '.', '') ?>%;">
+                        <strong class="department-volume-count" aria-label="<?= (int)$department['ticket_count'] ?> completed tickets"><?= number_format((int)$department['ticket_count']) ?></strong>
+                    </span>
+                </div>
+                <span class="department-volume-name"><?= $escape($department['dept_name']) ?></span>
+            </li>
             <?php endforeach; ?>
+                </ul>
+            </div>
+            <p class="department-chart-x-title" aria-hidden="true">Departments</p>
+        </div>
         </div>
         <?php else: ?>
         <p class="department-empty">No department ticket data is available.</p>
@@ -625,11 +654,12 @@ require_once '../includes/header.php';
                 <h2 id="queue-transactions-title" class="chart-title">Queue transactions</h2>
             </div>
             <div class="report-export-tools">
+                <?php if ($appliedFilters): ?>
+                <a class="export-btn" href="<?= $escape($filteredExportUrl) ?>">Export filtered</a>
+                <?php else: ?>
                 <a class="export-btn report-excel-btn" href="export_reports.php?scope=all" aria-label="Export all transactions to Excel">
                     <i data-feather="download" aria-hidden="true"></i><span>Export Excel</span>
                 </a>
-                <?php if ($appliedFilters): ?>
-                <a class="export-btn" href="<?= $escape($filteredExportUrl) ?>">Export filtered</a>
                 <?php endif; ?>
             </div>
         </div>

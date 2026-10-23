@@ -10,6 +10,7 @@
 		</div>
 	</div>
 </div>
+<script src="../assets/js/sidebar-navigation.js"></script>
 <script>
 window.toggleQueueSidebar = function (event) {
 	if (event) event.preventDefault();

@@ -196,7 +196,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 $deptList = [];
 $servicesByDepartment = [];
 if ($conn) {
-    $res = $conn->query("SELECT d.*, (SELECT COUNT(*) FROM services s WHERE s.dept_id = d.id) AS service_count, (SELECT COUNT(*) FROM queue q JOIN services s2 ON q.service_id = s2.id WHERE s2.dept_id = d.id AND q.status = 'waiting') AS waiting_count FROM departments d ORDER BY d.id ASC");
+    $res = $conn->query("SELECT d.*,
+      (SELECT COUNT(*) FROM services s WHERE s.dept_id = d.id) AS service_count,
+      COALESCE(qc.waiting_count, 0) AS waiting_count,
+      COALESCE(qc.called_count, 0) AS called_count,
+      COALESCE(qc.serving_count, 0) AS serving_count
+      FROM departments d
+      LEFT JOIN (
+        SELECT s.dept_id,
+          SUM(q.status = 'waiting') AS waiting_count,
+          SUM(q.status = 'called') AS called_count,
+          SUM(q.status = 'now_serving') AS serving_count
+        FROM queue q JOIN services s ON s.id = q.service_id
+        WHERE q.status IN ('waiting', 'called', 'now_serving')
+        GROUP BY s.dept_id
+      ) qc ON qc.dept_id = d.id
+      ORDER BY d.id ASC");
     if ($res) {
         while ($row = $res->fetch_assoc()) {
             $deptList[] = $row;
@@ -267,7 +282,7 @@ require_once '../includes/header.php';
 
   .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 20px;
     margin-bottom: 32px;
   }
@@ -302,11 +317,34 @@ require_once '../includes/header.php';
     .metrics-grid .stat-card-luxury:nth-child(1)::after { background: #7c3aed; }
     .metrics-grid .stat-card-luxury:nth-child(2)::after { background: #4f46e5; }
     .metrics-grid .stat-card-luxury:nth-child(3)::after { background: #059669; }
-    .metrics-grid .stat-card-luxury:nth-child(4)::after { background: #d97706; }
+
+  .dept-container { --dept-muted: #64748b; --dept-line: #e2e8f0; --dept-surface: #f8fafc; --dept-text: #334155; --dept-accent: #7c3aed; --dept-soft: #f3e8ff; }
+  :is(html.dark-mode, body.dark-mode) .dept-container { --dept-muted: #94a3b8; --dept-line: #334155; --dept-surface: #172234; --dept-text: #e2e8f0; --dept-accent: #c4b5fd; --dept-soft: #2e1b52; }
+  .dept-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+  .dept-card-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; background: var(--dept-soft); color: var(--dept-accent); font-size: 19px; }
+  .dept-card-prefix { padding: 5px 10px; border: 1px solid var(--dept-line); border-radius: 8px; color: var(--dept-muted); font-size: 11px; font-weight: 700; }
+  .dept-card-title { min-height: 4.5em; margin: 0 0 12px; font-size: 17px; font-weight: 800; line-height: 1.5; color: var(--dept-text); overflow-wrap: anywhere; }
+  .dept-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 20px; color: var(--dept-muted); font-size: 11px; }
+  .dept-status { display: inline-flex; align-items: center; gap: 5px; color: var(--dept-muted); font-weight: 700; }
+  .dept-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .dept-status[data-status="active"] { color: #059669; }
+  .dept-status[data-status="maintenance"] { color: #b45309; }
+  .dept-card-queue { padding: 14px; border: 1px solid var(--dept-line); border-radius: 12px; background: var(--dept-surface); }
+  .dept-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 11px; color: var(--dept-muted); font-weight: 700; }
+  .dept-queue-total { color: var(--dept-accent); font-size: 12px; }
+  .dept-queue-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+  .dept-queue-stats div { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .dept-queue-stats div + div { border-left: 1px solid var(--dept-line); }
+  .dept-queue-stats dt { order: 1; font-size: 10px; color: var(--dept-muted); }
+  .dept-queue-stats dd { margin: 0; font-size: 23px; line-height: 1.2; font-weight: 800; color: var(--dept-text); font-variant-numeric: tabular-nums; }
+  .dept-card-footer { margin-top: auto; padding-top: 16px; }
+  :is(html.dark-mode, body.dark-mode) .dept-status[data-status="active"] { color: #6ee7b7; }
+  :is(html.dark-mode, body.dark-mode) .dept-status[data-status="maintenance"] { color: #fbbf24; }
 
   .dept-cards-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
     gap: 24px;
   }
   @media (max-width: 1200px) { .dept-cards-grid { grid-template-columns: repeat(2, 1fr); } }
@@ -317,18 +355,16 @@ require_once '../includes/header.php';
     background: #ffffff;
     border: 1px solid #ece9f4;
     border-radius: 22px;
-    padding: 26px;
+    padding: 22px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
     transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 0 4px 20px -2px rgba(57, 35, 97, 0.04);
     position: relative;
   }
   .dept-card-lux:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 20px 40px -8px rgba(124, 58, 237, 0.12);
-    border-color: #c084fc;
+    box-shadow: 0 12px 28px -8px rgba(124, 58, 237, 0.12);
+    border-color: #a78bfa;
   }
   body.dark-mode .dept-card-lux {
     background: #1e293b !important;
@@ -362,15 +398,15 @@ require_once '../includes/header.php';
   body.dark-mode .metrics-grid .stat-card-luxury div[style*="background: #ecfdf5"] {
     background: #052e2b !important;
   }
-  body.dark-mode .metrics-grid .stat-card-luxury div[style*="background: #fffbeb"] {
-    background: #422006 !important;
-  }
   .dept-card-actions {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     min-width: 0;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--dept-line);
   }
   .dept-card-actions form,
   .dept-card-actions select {
@@ -382,16 +418,20 @@ require_once '../includes/header.php';
   .dept-card-delete {
     white-space: nowrap;
     padding: 6px 10px !important;
-    font-size: 10px !important;
+    font-size: 11px !important;
+    min-height: 36px;
   }
-  .dept-service-list { margin: 18px 0 4px; border-top: 1px solid #e2e8f0; }
-  .dept-service-list summary { padding: 14px 0; cursor: pointer; color: #7c3aed; font-size: 12px; font-weight: 800; }
-  .dept-service-list ul { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; }
+  .dept-service-list { margin: 16px 0 0; }
+  .dept-service-list summary { padding: 8px 0; cursor: pointer; color: var(--dept-accent); font-size: 12px; font-weight: 700; }
+  .dept-service-list ul { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+  .dept-service-list ul::-webkit-scrollbar { display: none; }
   .dept-service-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e2e8f0; }
   .dept-service-name { min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: #334155; }
   .dept-service-edit { flex-shrink: 0; border: 1px solid #ddd6fe; border-radius: 8px; background: #f5f3ff; color: #6d28d9; padding: 5px 9px; font-size: 11px; font-weight: 700; cursor: pointer; }
   .dept-service-empty { margin: 0 0 12px; color: #64748b; font-size: 12px; }
-  .dept-add-service { justify-content: center; width: 100%; margin-top: 16px; }
+  .dept-add-service { justify-content: center; width: 100%; }
+  .dept-card-lux :is(button, select, summary):focus-visible { outline: 2px solid #a78bfa; outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { .dept-card-lux, .stat-card-luxury, .btn-lux-primary { transition: none; transform: none; } }
   .department-service-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; margin: auto; border: 1px solid #e2e8f0; border-radius: 22px; padding: 24px; background: #ffffff; color: #0f172a; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3); }
   .department-service-dialog::backdrop { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px); }
   .department-service-dialog h2 { margin: 0; font-size: 22px; font-weight: 900; }
@@ -415,19 +455,8 @@ require_once '../includes/header.php';
     .dept-card-actions {
       grid-template-columns: minmax(0, 1fr) auto;
     }
-    .dept-card-actions > div {
-      grid-column: 1 / -1;
-      display: grid !important;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .dept-card-actions > div a,
-    .dept-card-actions > div form,
-    .dept-card-delete {
-      width: 100%;
-      justify-content: center;
-      text-align: center;
-    }
+    .dept-card-lux { padding: 18px; }
+    .dept-card-title { min-height: 0; }
   }
 
   .btn-lux-primary {
@@ -563,7 +592,7 @@ require_once '../includes/header.php';
       <h3 style="font-size: 28px; font-weight: 900; color: #0f172a; margin: 0 0 8px 0;"><?= count($deptList) ?></h3>
       <p style="font-size: 12px; color: #64748b; margin: 0; display: flex; align-items: center; gap: 6px;">
         <i data-feather="check-circle" style="width: 14px; height: 14px; color: #10b981;"></i>
-        <span>Active departments</span>
+        <span>Across all statuses</span>
       </p>
     </div>
 
@@ -582,27 +611,17 @@ require_once '../includes/header.php';
 
     <div class="stat-card-luxury">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-        <span style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8;">Active Queue Waiting</span>
+        <span style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8;">Active Queue</span>
         <div style="width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: #ecfdf5; color: #059669;">
           <i class="fa-solid fa-users" style="font-size: 20px;" aria-hidden="true"></i>
         </div>
       </div>
       <h3 style="font-size: 28px; font-weight: 900; color: #059669; margin: 0 0 8px 0;">
-        <?= array_sum(array_column($deptList, 'waiting_count')) ?>
+        <?= array_sum(array_column($deptList, 'waiting_count')) + array_sum(array_column($deptList, 'called_count')) + array_sum(array_column($deptList, 'serving_count')) ?>
       </h3>
-      <p style="font-size: 12px; color: #059669; font-weight: 700; margin: 0;">In-queue tickets</p>
+      <p style="font-size: 12px; color: #059669; font-weight: 700; margin: 0;">Waiting, called &amp; serving</p>
     </div>
 
-    <div class="stat-card-luxury">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-        <span style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8;">System Engine</span>
-        <div style="width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: #fffbeb; color: #d97706;">
-          <i class="fa-solid fa-server" style="font-size: 20px;" aria-hidden="true"></i>
-        </div>
-      </div>
-      <h3 style="font-size: 28px; font-weight: 900; color: #10b981; margin: 0 0 8px 0;">Active</h3>
-      <p style="font-size: 12px; color: #64748b; margin: 0;">Queuezy engine online</p>
-    </div>
   </div>
 
   <!-- Search Bar -->
@@ -623,6 +642,8 @@ require_once '../includes/header.php';
   <?php else: ?>
   <div class="dept-cards-grid" id="deptGrid">
     <?php foreach ($deptList as $d):
+      $status = $d['status'] ?? 'active';
+      $activeCount = (int)$d['waiting_count'] + (int)$d['called_count'] + (int)$d['serving_count'];
       $departmentName = strtolower(trim($d['dept_name']));
       $deptIcon = match (true) {
         str_contains($departmentName, 'hair') || str_contains($departmentName, 'barber') || str_contains($departmentName, 'grooming') => 'fa-scissors',
@@ -639,33 +660,34 @@ require_once '../includes/header.php';
         default => 'fa-layer-group'
       };
     ?>
-    <div class="dept-card-lux dept-item-card" id="department-<?= (int)$d['id'] ?>" data-name="<?= htmlspecialchars(strtolower($d['dept_name'])) ?>" data-code="<?= htmlspecialchars(strtolower($d['dept_code'])) ?>" style="border-color: #e9d5ff;">
+    <article class="dept-card-lux dept-item-card" id="department-<?= (int)$d['id'] ?>" aria-labelledby="department-title-<?= (int)$d['id'] ?>" data-name="<?= htmlspecialchars(strtolower($d['dept_name'])) ?>" data-code="<?= htmlspecialchars(strtolower($d['dept_code'])) ?>">
       <div>
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-          <div style="width: 48px; height: 48px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px; background: #f3e8ff; color: #7c3aed;">
-            <i class="fa-solid <?= $deptIcon ?>" style="font-size: 20px;" aria-hidden="true"></i>
+        <div class="dept-card-top">
+          <div class="dept-card-icon">
+            <i class="fa-solid <?= $deptIcon ?>" aria-hidden="true"></i>
           </div>
-          <span style="font-size: 11px; font-weight: 800; padding: 4px 12px; border-radius: 9999px; background: #f3e8ff; color: #7c3aed; border: 1px solid #e9d5ff;">
+          <span class="dept-card-prefix">
             Prefix: <?= htmlspecialchars($d['dept_code']) ?>-
           </span>
         </div>
 
-        <h3 style="font-size: 18px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0;"><?= htmlspecialchars($d['dept_name']) ?></h3>
-        <p data-status-description style="font-size: 12px; color: #64748b; line-height: 1.5; margin: 0 0 16px 0;"><?= ucfirst($d['status'] ?? 'active') ?> department entry in system.</p>
+        <h3 class="dept-card-title" id="department-title-<?= (int)$d['id'] ?>"><?= htmlspecialchars($d['dept_name']) ?></h3>
+        <div class="dept-card-meta">
+          <span class="dept-status" data-status-description data-status="<?= htmlspecialchars($status, ENT_QUOTES) ?>"><?= ucfirst($status) ?></span>
+          <span><?= (int)$d['service_count'] ?> services</span>
+          <span>ID #<?= (int)$d['id'] ?></span>
+        </div>
 
-        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; margin-bottom: 16px;">
-          <div style="display: flex; justify-content: space-between; padding-bottom: 6px;">
-            <span style="color: #64748b; font-weight: 600;">Department ID:</span>
-            <span style="color: #0f172a; font-weight: 800; font-family: monospace;">#<?= $d['id'] ?></span>
+        <div class="dept-card-queue" role="group" aria-label="Active queue">
+          <div class="dept-queue-heading">
+            <span>Active queue</span>
+            <strong class="dept-queue-total"><?= $activeCount ?> <?= $activeCount === 1 ? 'ticket' : 'tickets' ?></strong>
           </div>
-          <div style="display: flex; justify-content: space-between; padding-bottom: 6px;">
-            <span style="color: #64748b; font-weight: 600;">Configured Services:</span>
-            <span style="font-weight: 700; color: #7c3aed;"><?= (int)$d['service_count'] ?> Services</span>
-          </div>
-          <div style="display: flex; justify-content: space-between; padding-bottom: 6px;">
-            <span style="color: #64748b; font-weight: 600;">Current Waiting:</span>
-            <span style="color: #7c3aed; font-weight: 800;"><?= $d['waiting_count'] ?> In Queue</span>
-          </div>
+          <dl class="dept-queue-stats">
+            <div><dt>Waiting</dt><dd><?= (int)$d['waiting_count'] ?></dd></div>
+            <div><dt>Called</dt><dd><?= (int)$d['called_count'] ?></dd></div>
+            <div><dt>Serving</dt><dd><?= (int)$d['serving_count'] ?></dd></div>
+          </dl>
         </div>
         <details class="dept-service-list" <?= (int)($_GET['department'] ?? 0) === (int)$d['id'] ? 'open' : '' ?>>
           <summary>Manage services (<?= (int)$d['service_count'] ?>)</summary>
@@ -684,15 +706,15 @@ require_once '../includes/header.php';
         </details>
       </div>
 
+      <div class="dept-card-footer">
       <button type="button" class="btn-lux-primary dept-add-service" data-service-action="add_service" data-dept-id="<?= (int)$d['id'] ?>" data-dept-name="<?= htmlspecialchars($d['dept_name'], ENT_QUOTES) ?>">
         <i class="fa-solid fa-plus" aria-hidden="true"></i><span>Add Service</span>
       </button>
-      <div class="dept-card-actions" style="padding-top: 16px;">
-        <?php $status = $d['status'] ?? 'active'; ?>
+      <div class="dept-card-actions">
         <form method="post" class="inline">
           <input type="hidden" name="action" value="update_status">
           <input type="hidden" name="dept_id" value="<?= $d['id'] ?>">
-          <select name="status" aria-label="<?= htmlspecialchars($d['dept_name']) ?> status" data-department-name="<?= htmlspecialchars($d['dept_name'], ENT_QUOTES) ?>" data-previous-status="<?= htmlspecialchars($status, ENT_QUOTES) ?>" onchange="confirmStatusChange(this)" style="font-size: 12px; font-weight: 700; color: #334155; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 8px; cursor: pointer; padding: 6px 28px 6px 9px;">
+          <select name="status" aria-label="<?= htmlspecialchars($d['dept_name']) ?> status" data-department-name="<?= htmlspecialchars($d['dept_name'], ENT_QUOTES) ?>" data-previous-status="<?= htmlspecialchars($status, ENT_QUOTES) ?>" onchange="confirmStatusChange(this)" style="font-size: 12px; font-weight: 700; color: #334155; border: 1px solid #cbd5e1; background: #ffffff; border-radius: 8px; cursor: pointer; min-height: 36px; padding: 6px 28px 6px 9px;">
             <option value="active" <?= $status === 'active' ? 'selected' : '' ?>>Active</option>
             <option value="inactive" <?= $status === 'inactive' ? 'selected' : '' ?>>Inactive</option>
             <option value="maintenance" <?= $status === 'maintenance' ? 'selected' : '' ?>>Maintenance</option>
@@ -705,12 +727,13 @@ require_once '../includes/header.php';
             <input type="hidden" name="dept_id" value="<?= $d['id'] ?>">
             <button type="submit" class="dept-card-delete px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition inline-flex items-center gap-1.5 shadow-sm" title="Delete Department">
               <i data-feather="trash-2" style="width: 14px; height: 14px;"></i>
-              <span>DELETE</span>
+              <span>Delete</span>
             </button>
           </form>
         </div>
       </div>
-    </div>
+      </div>
+    </article>
     <?php endforeach; ?>
   </div>
   <?php endif; ?>
@@ -882,7 +905,10 @@ require_once '../includes/header.php';
         select.dataset.previousStatus = select.value;
         const status = select.value;
         const statusDescription = card?.querySelector('[data-status-description]');
-        if (statusDescription) statusDescription.textContent = `${status.charAt(0).toUpperCase() + status.slice(1)} department entry in system.`;
+        if (statusDescription) {
+          statusDescription.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+          statusDescription.dataset.status = status;
+        }
         showToast('Department status updated.');
       })
       .catch(() => {
