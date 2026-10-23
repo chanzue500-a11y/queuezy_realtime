@@ -175,6 +175,19 @@ if ($conn) {
     }
 }
 
+$serviceGroups = [];
+foreach ($serviceList as $service) {
+    $departmentId = (int)$service['dept_id'];
+    if (!isset($serviceGroups[$departmentId])) {
+        $serviceGroups[$departmentId] = [
+            'name' => $service['dept_name'] ?? 'General',
+            'code' => $service['dept_code'] ?? 'ID ' . $departmentId,
+            'services' => [],
+        ];
+    }
+    $serviceGroups[$departmentId]['services'][] = $service;
+}
+
 $pageTitle = 'Services | Queuezy Admin'; 
 $pageHeading = 'Services Catalog'; 
 require_once '../includes/header.php'; 
@@ -273,30 +286,58 @@ require_once '../includes/header.php';
     background: #422006 !important;
   }
 
-  .filter-pill {
-    padding: 8px 18px;
-    border-radius: 14px;
-    font-size: 13px;
-    font-weight: 600;
+  .service-groups { display: grid; gap: 16px; }
+  .service-group {
+    min-width: 0;
     border: 1px solid #ece9f4;
+    border-radius: 20px;
     background: #ffffff;
-    color: #64748b;
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    display: inline-flex;
+    overflow: hidden;
+  }
+  .service-group-summary {
+    display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 16px;
+    padding: 20px 24px;
+    cursor: pointer;
+    list-style: none;
+    color: #0f172a;
   }
-  .filter-pill:hover {
-    border-color: #c084fc;
+  .service-group-summary::-webkit-details-marker { display: none; }
+  .service-group-summary:hover { background: #faf5ff; }
+  .service-group-summary:focus-visible { outline: 3px solid #a855f7; outline-offset: -3px; }
+  .service-group-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: #f3e8ff;
     color: #7c3aed;
-    background: #faf5ff;
   }
-  .filter-pill.active {
-    background: #7c3aed;
-    color: #ffffff;
-    border-color: #7c3aed;
-    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+  .service-group-heading { flex: 1; min-width: 0; }
+  .service-group-name { display: block; font-size: 15px; font-weight: 800; overflow-wrap: anywhere; }
+  .service-group-code { display: block; margin-top: 4px; color: #64748b; font-size: 12px; }
+  .service-group-count { flex-shrink: 0; color: #7c3aed; font-size: 12px; font-weight: 700; }
+  .service-group-chevron { flex-shrink: 0; width: 20px; height: 20px; transition: transform 0.2s ease; }
+  .service-group[open] > .service-group-summary .service-group-chevron { transform: rotate(180deg); }
+  .service-group-content { padding: 24px; border-top: 1px solid #ece9f4; }
+  body.dark-mode .service-group { background: #1e293b; border-color: #334155; }
+  body.dark-mode .service-group-summary { color: #f8fafc; }
+  body.dark-mode .service-group-summary:hover { background: #273449; }
+  body.dark-mode .service-group-icon { background: #2e1b52; color: #d8b4fe; }
+  body.dark-mode .service-group-code { color: #cbd5e1; }
+  body.dark-mode .service-group-count { color: #d8b4fe; }
+  body.dark-mode .service-group-content { border-color: #334155; }
+  @media (max-width: 640px) {
+    .service-group-summary { padding: 16px; gap: 10px; }
+    .service-group-content { padding: 16px; }
+    .service-group-name { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .service-group-chevron { transition: none; }
   }
 
   .hidden { display: none !important; }
@@ -413,13 +454,14 @@ require_once '../includes/header.php';
 
 <!-- Toolbar & Search -->
 <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm mb-8 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+  <p class="text-sm text-slate-500">Select a department to view its services.</p>
   <div class="relative flex-1 max-w-md md:ml-auto">
     <i data-feather="search" class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-    <input type="text" id="serviceSearchInput" onkeyup="filterServices()" placeholder="Search service name or department..." class="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-purple-500 focus:bg-white transition">
+    <input type="search" id="serviceSearchInput" oninput="filterServices()" aria-label="Search services or departments" placeholder="Search service name or department..." class="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-purple-500 focus:bg-white transition">
   </div>
 </div>
 
-<!-- Services Cards Grid -->
+<!-- Department dropdowns -->
 <?php if (empty($serviceList)): ?>
 <div class="py-16 text-center bg-white border border-[#ece9f4] rounded-2xl p-8">
   <div class="w-16 h-16 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center mx-auto mb-4">
@@ -429,9 +471,21 @@ require_once '../includes/header.php';
   <p class="text-xs text-slate-400 max-w-sm mx-auto mt-1">Services configured by administrators will appear here.</p>
 </div>
 <?php else: ?>
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="servicesGrid">
-  <?php foreach ($serviceList as $s): ?>
-  <div class="service-card-lux service-item" data-name="<?= htmlspecialchars(strtolower($s['service_name'])) ?>" data-dept="<?= htmlspecialchars(strtolower($s['dept_name'] ?? '')) ?>">
+<div class="service-groups" id="servicesGrid">
+  <?php foreach ($serviceGroups as $group): ?>
+  <details class="service-group">
+    <summary class="service-group-summary">
+      <span class="service-group-icon"><i data-feather="layers" class="w-5 h-5" aria-hidden="true"></i></span>
+      <span class="service-group-heading">
+        <span class="service-group-name"><?= htmlspecialchars($group['name']) ?></span>
+        <span class="service-group-code"><?= htmlspecialchars($group['code']) ?></span>
+      </span>
+      <span class="service-group-count" data-total="<?= count($group['services']) ?>"><?= count($group['services']) ?> <?= count($group['services']) === 1 ? 'service' : 'services' ?></span>
+      <i data-feather="chevron-down" class="service-group-chevron" aria-hidden="true"></i>
+    </summary>
+    <div class="service-group-content grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  <?php foreach ($group['services'] as $s): ?>
+  <div class="service-card-lux service-item" data-name="<?= htmlspecialchars(strtolower($s['service_name'])) ?>" data-dept="<?= htmlspecialchars(strtolower($group['name'] . ' ' . $group['code'])) ?>">
     <div>
       <div class="flex items-center justify-between mb-4">
         <span class="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-purple-50 text-purple-700 border border-purple-200">
@@ -472,7 +526,11 @@ require_once '../includes/header.php';
     </div>
   </div>
   <?php endforeach; ?>
+    </div>
+  </details>
+  <?php endforeach; ?>
 </div>
+<p id="serviceSearchStatus" role="status" class="text-sm text-slate-500 mt-4"></p>
 <?php endif; ?>
 
 <!-- Edit Service Time Modal -->
@@ -527,16 +585,43 @@ require_once '../includes/header.php';
 <script>
   function filterServices() {
     const q = document.getElementById('serviceSearchInput').value.toLowerCase().trim();
-    const items = document.querySelectorAll('.service-item');
-    items.forEach(item => {
-      const name = item.getAttribute('data-name') || '';
-      const dept = item.getAttribute('data-dept') || '';
-      if (!q || name.includes(q) || dept.includes(q)) {
-        item.style.display = '';
-      } else {
-        item.style.display = 'none';
+    let totalMatches = 0;
+    document.querySelectorAll('.service-group').forEach(group => {
+      // Restore the administrator's expanded groups when the search is cleared.
+      if (q && !group.hasAttribute('data-open-before-search')) {
+        group.dataset.openBeforeSearch = group.open ? 'true' : 'false';
       }
+      let matches = 0;
+      group.querySelectorAll('.service-item').forEach(item => {
+        const name = item.getAttribute('data-name') || '';
+        const dept = item.getAttribute('data-dept') || '';
+        const visible = !q || name.includes(q) || dept.includes(q);
+        item.classList.toggle('hidden', !visible);
+        if (visible) matches += 1;
+      });
+      totalMatches += matches;
+      group.classList.toggle('hidden', matches === 0);
+      if (q) {
+        group.open = matches > 0;
+      } else if (group.hasAttribute('data-open-before-search')) {
+        group.open = group.dataset.openBeforeSearch === 'true';
+        delete group.dataset.openBeforeSearch;
+      }
+
+      const count = group.querySelector('.service-group-count');
+      const total = Number(count.dataset.total);
+      count.textContent = q
+        ? `${matches} of ${total} ${total === 1 ? 'service' : 'services'}`
+        : `${total} ${total === 1 ? 'service' : 'services'}`;
     });
+    const status = document.getElementById('serviceSearchStatus');
+    if (status) {
+      status.textContent = q
+        ? (totalMatches > 0
+          ? `${totalMatches} matching ${totalMatches === 1 ? 'service' : 'services'}.`
+          : 'No services match your search. Try another service or department.')
+        : '';
+    }
   }
 
   function openEditTimeModal(serviceId, estimatedTime, serviceName) {
