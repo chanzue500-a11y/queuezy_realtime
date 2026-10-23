@@ -193,6 +193,8 @@ $pageHeading = 'Services Catalog';
 require_once '../includes/header.php'; 
 ?>
 
+<link rel="stylesheet" href="../assets/css/admin-directory.css">
+
 <!-- Embedded Custom CSS for Senior-Grade UI/UX & Micro-interactions -->
 <style>
   .stat-card-luxury {
@@ -202,24 +204,13 @@ require_once '../includes/header.php';
     border: 1px solid #ece9f4;
     border-radius: 20px;
     padding: 24px;
-    transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
     box-shadow: 0 4px 20px -2px rgba(57, 35, 97, 0.04);
   }
   .stat-card-luxury:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 16px 36px -4px rgba(124, 58, 237, 0.12);
+    background: #faf5ff;
     border-color: #d8b4fe;
   }
-  .stat-card-luxury::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, #7c3aed, #a855f7);
-    opacity: 0;
-    transition: opacity 0.25s ease;
-  }
-  .stat-card-luxury:hover::after { opacity: 1; }
 
   .service-card-lux {
     background: #ffffff;
@@ -229,19 +220,24 @@ require_once '../includes/header.php';
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
     box-shadow: 0 4px 20px -2px rgba(57, 35, 97, 0.03);
     position: relative;
   }
   .service-card-lux:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 20px 40px -8px rgba(124, 58, 237, 0.12);
-    border-color: #c084fc;
+    background: #faf5ff;
+    border-color: #d8b4fe;
   }
-  body.dark-mode .service-card-lux {
+  body.dark-mode .service-card-lux,
+  body.dark-mode .stat-card-luxury {
     background: #1e293b;
     border-color: #334155;
     color: #f8fafc;
+  }
+  body.dark-mode .queue-content .service-card-lux:hover,
+  body.dark-mode .queue-content .stat-card-luxury:hover {
+    background: #2a2240 !important;
+    border-color: #8b5cf6 !important;
   }
   body.dark-mode .service-card-lux h3,
   body.dark-mode .service-card-lux .font-black.text-slate-900 {
@@ -293,7 +289,9 @@ require_once '../includes/header.php';
     border-radius: 20px;
     background: #ffffff;
     overflow: hidden;
+    transition: border-color 0.2s ease;
   }
+  .service-group:hover { border-color: #d8b4fe; }
   .service-group-summary {
     display: flex;
     align-items: center;
@@ -302,6 +300,7 @@ require_once '../includes/header.php';
     cursor: pointer;
     list-style: none;
     color: #0f172a;
+    transition: background-color 0.2s ease;
   }
   .service-group-summary::-webkit-details-marker { display: none; }
   .service-group-summary:hover { background: #faf5ff; }
@@ -325,8 +324,9 @@ require_once '../includes/header.php';
   .service-group[open] > .service-group-summary .service-group-chevron { transform: rotate(180deg); }
   .service-group-content { padding: 24px; border-top: 1px solid #ece9f4; }
   body.dark-mode .service-group { background: #1e293b; border-color: #334155; }
+  body.dark-mode .service-group:hover { border-color: #8b5cf6; }
   body.dark-mode .service-group-summary { color: #f8fafc; }
-  body.dark-mode .service-group-summary:hover { background: #273449; }
+  body.dark-mode .service-group-summary:hover { background: #2a2240; }
   body.dark-mode .service-group-icon { background: #2e1b52; color: #d8b4fe; }
   body.dark-mode .service-group-code { color: #cbd5e1; }
   body.dark-mode .service-group-count { color: #d8b4fe; }
@@ -337,6 +337,10 @@ require_once '../includes/header.php';
     .service-group-name { font-size: 13px; }
   }
   @media (prefers-reduced-motion: reduce) {
+    .stat-card-luxury,
+    .service-card-lux,
+    .service-group,
+    .service-group-summary,
     .service-group-chevron { transition: none; }
   }
 
@@ -510,14 +514,14 @@ require_once '../includes/header.php';
       </span>
 
       <div class="flex items-center gap-2">
-        <button type="button" class="edit-service-time-btn px-3 py-1.5 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs transition inline-flex items-center gap-1.5" title="Edit queue time" data-service-id="<?= (int)$s['id'] ?>" data-estimated-time="<?= (int)$s['estimated_time_mins'] ?>" data-service-name="<?= htmlspecialchars((string)($s['service_name'] ?? ''), ENT_QUOTES) ?>">
+        <button type="button" class="edit-service-time-btn directory-button" title="Edit queue time" data-service-id="<?= (int)$s['id'] ?>" data-estimated-time="<?= (int)$s['estimated_time_mins'] ?>" data-service-name="<?= htmlspecialchars((string)($s['service_name'] ?? ''), ENT_QUOTES) ?>">
           <i data-feather="edit-3" class="w-3.5 h-3.5"></i>
           <span>EDIT</span>
         </button>
         <form method="post" class="inline delete-service-form" data-service-name="<?= htmlspecialchars((string)($s['service_name'] ?? ''), ENT_QUOTES) ?>">
         <input type="hidden" name="action" value="delete">
         <input type="hidden" name="service_id" value="<?= $s['id'] ?>">
-        <button type="submit" class="px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition inline-flex items-center gap-1.5 shadow-sm" title="Delete Service">
+        <button type="submit" class="directory-button directory-button--danger" title="Delete Service">
           <i data-feather="trash-2" class="w-3.5 h-3.5"></i>
           <span>DELETE</span>
         </button>
@@ -531,6 +535,7 @@ require_once '../includes/header.php';
   <?php endforeach; ?>
 </div>
 <p id="serviceSearchStatus" role="status" class="text-sm text-slate-500 mt-4"></p>
+<div id="servicePagination" class="directory-pagination"></div>
 <?php endif; ?>
 
 <!-- Edit Service Time Modal -->
@@ -558,8 +563,8 @@ require_once '../includes/header.php';
       </div>
 
       <div class="flex justify-end gap-3 pt-2">
-        <button type="button" onclick="closeEditTimeModal()" class="rounded-xl border border-slate-600 bg-slate-800 px-5 py-2.5 text-sm font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-700">Cancel</button>
-        <button type="submit" class="rounded-xl bg-gradient-to-r from-purple-600 to-violet-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-purple-500/25 transition hover:brightness-110">Save Time</button>
+        <button type="button" onclick="closeEditTimeModal()" class="directory-button">Cancel</button>
+        <button type="submit" class="directory-button directory-button--primary">Save Time</button>
       </div>
     </form>
   </div>
@@ -574,18 +579,22 @@ require_once '../includes/header.php';
     <h3 class="text-lg font-black text-white">Save queue time?</h3>
     <p class="text-sm text-slate-300 mt-2">Update <strong id="confirmTimeServiceName" class="text-white"></strong> with the new processing time?</p>
     <div class="flex justify-end gap-2 mt-6">
-      <button type="button" onclick="closeConfirmTimeModal()" class="px-4 py-2.5 rounded-xl border border-slate-500 text-slate-200 text-xs font-semibold hover:bg-slate-700">Cancel</button>
-      <button type="button" onclick="submitEditTimeForm()" class="px-5 py-2.5 rounded-xl bg-purple-600 text-white text-xs font-bold hover:bg-purple-700">Save Time</button>
+      <button type="button" onclick="closeConfirmTimeModal()" class="directory-button">Cancel</button>
+      <button type="button" onclick="submitEditTimeForm()" class="directory-button directory-button--primary">Save Time</button>
     </div>
   </div>
 </div>
 
 <div class="toast-container" id="toastBox"></div>
 
+<script src="../assets/js/directory-pagination.js"></script>
 <script>
+  let servicePagination = null;
+
   function filterServices() {
     const q = document.getElementById('serviceSearchInput').value.toLowerCase().trim();
     let totalMatches = 0;
+    const matchingGroups = [];
     document.querySelectorAll('.service-group').forEach(group => {
       // Restore the administrator's expanded groups when the search is cleared.
       if (q && !group.hasAttribute('data-open-before-search')) {
@@ -601,6 +610,7 @@ require_once '../includes/header.php';
       });
       totalMatches += matches;
       group.classList.toggle('hidden', matches === 0);
+      if (matches > 0) matchingGroups.push(group);
       if (q) {
         group.open = matches > 0;
       } else if (group.hasAttribute('data-open-before-search')) {
@@ -621,6 +631,9 @@ require_once '../includes/header.php';
           ? `${totalMatches} matching ${totalMatches === 1 ? 'service' : 'services'}.`
           : 'No services match your search. Try another service or department.')
         : '';
+    }
+    if (servicePagination) {
+      servicePagination.setItems(matchingGroups, { reset: true });
     }
   }
 
@@ -662,6 +675,18 @@ require_once '../includes/header.php';
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    const paginationControls = document.getElementById('servicePagination');
+    if (paginationControls) {
+      servicePagination = new DirectoryPagination({
+        items: Array.from(document.querySelectorAll('.service-group')),
+        controls: paginationControls,
+        pageSize: 5,
+        pageSizes: [5, 10, 20],
+        label: 'departments'
+      });
+      // Also apply a query restored by the browser's form history.
+      filterServices();
+    }
     if (typeof feather !== 'undefined') {
       feather.replace();
     }
