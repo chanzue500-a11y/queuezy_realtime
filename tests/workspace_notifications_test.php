@@ -49,6 +49,12 @@ notificationExpect($staff['ticket'] === 'NCE-99', 'Choose latest status start ti
 notificationExpect(str_contains($staff['message'], 'has been called (Nails)'), 'Called status incorrect');
 notificationExpect(!str_contains($staff['message'], 'being served'), 'Called ticket must not be labelled serving');
 notificationExpect($staff['key'] !== $admin['key'], 'Activity must be scoped by role');
+notificationQuery($conn, 'UPDATE queue SET started_at = DATE_ADD(started_at, INTERVAL 1 MINUTE) WHERE id = 99');
+notificationExpect(workspaceNotificationSnapshot($conn, 'admin')['key'] === $admin['key'], 'Staff recalls must not re-alert the same admin overview');
+notificationQuery($conn, "UPDATE queue SET status = 'completed' WHERE id = 100");
+notificationQuery($conn, "INSERT INTO queue VALUES (105,11,'BMT-105','waiting',NULL)");
+$replacement = workspaceNotificationSnapshot($conn, 'admin');
+notificationExpect($replacement['waiting'] === $admin['waiting'] && $replacement['key'] !== $admin['key'], 'New waiting tickets must alert even if the waiting count stays the same');
 
 notificationQuery($conn, "UPDATE queue SET status = 'now_serving' WHERE id = 99");
 $serving = workspaceNotificationSnapshot($conn, 'staff');

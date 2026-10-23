@@ -10,7 +10,10 @@ function workspaceNotificationSnapshot(?mysqli $connection, string $role): array
     $queries = [
         'queue' => "SELECT COALESCE(SUM(status = 'waiting'), 0) AS waiting,
             COALESCE(SUM(status = 'called'), 0) AS called,
-            COALESCE(SUM(status = 'now_serving'), 0) AS serving FROM queue",
+            COALESCE(SUM(status = 'now_serving'), 0) AS serving,
+            MAX(CASE WHEN status = 'waiting' THEN id END) AS latest_waiting_id,
+            MAX(CASE WHEN status = 'called' THEN id END) AS latest_called_id,
+            MAX(CASE WHEN status = 'now_serving' THEN id END) AS latest_serving_id FROM queue",
         'ticket' => "SELECT q.id, q.ticket_number, q.status, q.started_at, d.dept_name
             FROM queue q LEFT JOIN services s ON s.id = q.service_id
             LEFT JOIN departments d ON d.id = s.dept_id
@@ -58,6 +61,9 @@ function workspaceNotificationSnapshot(?mysqli $connection, string $role): array
     } else {
         $snapshot['message'] = $snapshot['ticket'] !== null ? $snapshot['call_message'] : $snapshot['waiting_message'];
     }
-    $snapshot['key'] = hash('sha256', $role . '|' . date('Y-m-d') . '|' . json_encode($rows));
+    $activityRows = $rows;
+    // Admin alerts track workspace changes, rather than repeated staff recalls.
+    if ($role === 'admin') unset($activityRows['ticket']);
+    $snapshot['key'] = hash('sha256', $role . '|' . date('Y-m-d') . '|' . json_encode($activityRows));
     return $snapshot;
 }

@@ -20,7 +20,7 @@ require_once __DIR__ . '/profile_photo.php';
 $headerProfilePhotoFilename = getUserProfilePhotoFilename((int)$_SESSION['user_id']);
 $headerProfilePhotoUrl = $headerProfilePhotoFilename ? '../uploads/profile/' . rawurlencode($headerProfilePhotoFilename) : '';
 require_once __DIR__ . '/workspace_notifications.php';
-$workspaceNotifications = workspaceNotificationSnapshot($conn ?? null, $_SESSION['user_role']);
+$workspaceNotifications ??= workspaceNotificationSnapshot($conn ?? null, $_SESSION['user_role']);
 $adminWaitingCount = $workspaceNotifications['waiting'];
 $adminNotificationKey = $workspaceNotifications['key'];
 $hasAdminNotification = $workspaceNotifications['has_activity'];
@@ -54,6 +54,10 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
         body.dark-mode .admin-notification-panel h3,
         body.dark-mode .admin-notification-panel strong { color: #f8fafc; }
         body.dark-mode .admin-notification-panel p { color: #cbd5e1; }
+        .admin-notification-panel a { display: inline-flex; margin-top: 14px; color: #a78bfa; font-size: 12px; font-weight: 700; text-decoration: none; }
+        .admin-notification-panel a:hover { color: #ddd6fe; text-decoration: underline; }
+        .admin-notification-panel a:focus-visible { outline: 2px solid #a78bfa; outline-offset: 4px; }
+        @media (max-width: 600px) { .admin-notification-panel { position: fixed; top: 82px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 100px); overflow-y: auto; } }
         @media (prefers-reduced-motion: reduce) { .admin-notification-panel { transition: none; } .queue-content { animation: none; } }
     </style>
     <script src="../assets/js/feather.min.js"></script>
@@ -149,10 +153,11 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
             <button class="queue-menu" id="queueSidebarOpen" type="button" aria-label="Open sidebar" aria-controls="queueSidebar" aria-expanded="false"><span aria-hidden="true">&gt;</span></button>
             <div class="queue-topbar__actions">
                 <div class="admin-notification-wrap">
-                    <button class="queue-icon-button" id="adminNotificationButton" type="button" aria-label="Notifications" aria-expanded="false"><i class="fa-solid fa-bell"></i><?php if ($hasAdminNotification): ?><b id="adminTopNotificationDot"></b><?php endif; ?></button>
+                    <button class="queue-icon-button" id="adminNotificationButton" type="button" aria-label="Notifications" aria-controls="adminNotificationPanel" aria-expanded="false"><i class="fa-solid fa-bell"></i><?php if ($hasAdminNotification): ?><b id="adminTopNotificationDot"></b><?php endif; ?></button>
                     <div class="admin-notification-panel" id="adminNotificationPanel" role="status" aria-live="polite">
                         <h3>Notifications</h3>
                         <p id="adminNotificationContent"><?= htmlspecialchars($workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                        <a href="<?= htmlspecialchars($staffNotificationsPath, ENT_QUOTES, 'UTF-8') ?>">View notifications &rarr;</a>
                     </div>
                 </div>
                 <a class="queue-user" href="<?= htmlspecialchars($staffProfilePath, ENT_QUOTES) ?>" aria-label="Open Settings" title="Settings">
@@ -172,7 +177,8 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
                     let hasActivity = <?= $hasAdminNotification ? 'true' : 'false' ?>;
                     const storageKey = <?= json_encode('queuezy-viewed-notification-' . ($_SESSION['user_role'] ?? '') . '-' . (int)$_SESSION['user_id']) ?>;
                     const isNotificationsPage = <?= in_array($currentPage, ['notifications.php', 'notification.php'], true) ? 'true' : 'false' ?>;
-                    const readViewedKey = () => { try { return localStorage.getItem(storageKey); } catch { return ''; } };
+                    let viewedKey = '';
+                    const readViewedKey = () => { try { return localStorage.getItem(storageKey) || viewedKey; } catch { return viewedKey; } };
                     const syncNotificationBadge = () => {
                         const unread = hasActivity && notificationKey && notificationKey !== readViewedKey();
                         if (!unread) {
@@ -193,6 +199,7 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
                     };
                     const clearNotificationBadge = () => {
                         if (!notificationKey) return;
+                        viewedKey = notificationKey;
                         try { localStorage.setItem(storageKey, notificationKey); } catch {}
                         sidebarLink?.querySelector('em')?.remove();
                         document.getElementById('adminTopNotificationDot')?.remove();
@@ -210,11 +217,26 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
                             button?.setAttribute('aria-expanded', 'false');
                         }
                     });
+                    document.addEventListener('keydown', (event) => {
+                        if (event.key === 'Escape' && panel?.classList.contains('is-visible')) {
+                            panel.classList.remove('is-visible');
+                            button?.setAttribute('aria-expanded', 'false');
+                            button?.focus();
+                        }
+                    });
+                    window.addEventListener('storage', (event) => {
+                        if (event.key === storageKey) {
+                            viewedKey = event.newValue || '';
+                            syncNotificationBadge();
+                        }
+                    });
                     sidebarLink?.addEventListener('click', clearNotificationBadge);
                     if (isNotificationsPage) clearNotificationBadge();
                     const updateAdminNotifications = async () => {
+                        const controller = new AbortController();
+                        const timeout = window.setTimeout(() => controller.abort(), 10000);
                         try {
-                            const response = await fetch('../api/admin_notification.php', { cache: 'no-store' });
+                            const response = await fetch('../api/admin_notification.php', { cache: 'no-store', signal: controller.signal });
                             if (!response.ok) throw new Error('Notifications unavailable');
                             const data = await response.json();
                             if (!data?.ok) throw new Error('Notifications unavailable');
@@ -234,6 +256,7 @@ $hasAdminNotification = $workspaceNotifications['has_activity'];
                                 element.textContent = 'Updates unavailable. Retrying…';
                             });
                         } finally {
+                            window.clearTimeout(timeout);
                             window.setTimeout(updateAdminNotifications, 5000);
                         }
                     };

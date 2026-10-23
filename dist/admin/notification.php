@@ -8,6 +8,9 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
     exit;
 }
 
+require_once __DIR__ . '/../includes/workspace_notifications.php';
+$workspaceNotifications = workspaceNotificationSnapshot($conn, 'admin');
+
 $pageTitle = 'Notifications | Queuezy Admin';
 $pageHeading = 'Notifications';
 require_once '../includes/header.php';
@@ -107,19 +110,19 @@ require_once '../includes/header.php';
         <article class="admin-notification-card">
             <div class="admin-notification-card__icon"><i class="fa-solid fa-clock" aria-hidden="true"></i></div>
             <h2>Queue overview</h2>
-            <p data-notification-field="queue_message"><?= htmlspecialchars($workspaceNotifications['queue_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+            <p data-notification-field="queue_message"><?= htmlspecialchars($workspaceNotifications['queue_message'] ?? 'Notifications are temporarily unavailable.', ENT_QUOTES, 'UTF-8') ?></p>
         </article>
 
         <article class="admin-notification-card">
             <div class="admin-notification-card__icon"><i class="fa-solid fa-credit-card" aria-hidden="true"></i></div>
             <h2>Service changes</h2>
-            <p data-notification-field="service_message"><?= htmlspecialchars($workspaceNotifications['service_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+            <p data-notification-field="service_message"><?= htmlspecialchars($workspaceNotifications['service_message'] ?? 'Notifications are temporarily unavailable.', ENT_QUOTES, 'UTF-8') ?></p>
         </article>
 
         <article class="admin-notification-card">
             <div class="admin-notification-card__icon"><i class="fa-solid fa-user-plus" aria-hidden="true"></i></div>
             <h2>New customers</h2>
-            <p data-notification-field="customer_message"><?= htmlspecialchars($workspaceNotifications['customer_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+            <p data-notification-field="customer_message"><?= htmlspecialchars($workspaceNotifications['customer_message'] ?? 'Notifications are temporarily unavailable.', ENT_QUOTES, 'UTF-8') ?></p>
         </article>
     </div>
 </section>

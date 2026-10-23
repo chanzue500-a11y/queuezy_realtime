@@ -29,6 +29,7 @@ class Element {
   querySelector(tagName) { return this.children.find((child) => child.tagName === tagName); }
   addEventListener(name, callback) { this.events[name] = callback; }
   setAttribute() {}
+  focus() { this.focused = true; }
 }
 
 (async () => {
@@ -38,19 +39,35 @@ class Element {
   field.dataset.notificationField = 'queue_message';
   const scheduled = [];
   const stored = new Map();
+  const windowEvents = {};
+  const documentEvents = {};
+  let storageBlocked = false;
+  let timeoutCallback = null;
+  let hang = false;
   let fail = false;
   let snapshot = { ok: true, key: 'first', has_activity: true, message: '2 waiting, 0 called, 1 being served.', queue_message: '2 waiting, 0 called, 1 being served.' };
   const document = {
     getElementById: (id) => elements[id] || elements.adminNotificationButton.children.find((child) => child.id === id),
     createElement: (tag) => new Element(tag),
     querySelectorAll: () => [field],
-    addEventListener() {},
+    addEventListener(name, callback) { documentEvents[name] = callback; },
   };
   vm.runInNewContext(script, {
     document,
-    localStorage: { getItem: (key) => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-    window: { setTimeout: (callback) => scheduled.push(callback) },
-    fetch: async () => ({ ok: !fail, json: async () => snapshot }),
+    localStorage: {
+      getItem: (key) => { if (storageBlocked) throw new Error('Storage blocked'); return stored.get(key); },
+      setItem: (key, value) => { if (storageBlocked) throw new Error('Storage blocked'); stored.set(key, value); },
+    },
+    AbortController,
+    window: {
+      setTimeout: (callback, delay) => { if (delay === 5000) scheduled.push(callback); else timeoutCallback = callback; },
+      clearTimeout: () => { timeoutCallback = null; },
+      addEventListener: (name, callback) => { windowEvents[name] = callback; },
+    },
+    fetch: async (url, options) => {
+      if (hang) await new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('Timed out'))));
+      return { ok: !fail, json: async () => snapshot };
+    },
   });
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   await settle();
@@ -71,6 +88,25 @@ class Element {
   assert.equal(elements.adminSidebarNotificationLink.children.length, 1, 'New state should restore unread badge');
   assert.equal(elements.adminNotificationContent.textContent, snapshot.message, 'Use API role-specific message');
 
+  storageBlocked = true;
+  elements.adminNotificationButton.events.click({ stopPropagation() {} });
+  documentEvents.keydown({ key: 'Escape' });
+  assert.equal(elements.adminNotificationPanel.classList.contains('is-visible'), false, 'Escape must close the popover');
+  assert.equal(elements.adminNotificationButton.focused, true, 'Escape must return focus to the bell');
+  await scheduled.shift()();
+  assert.equal(elements.adminSidebarNotificationLink.children.length, 0, 'Reading should work when browser storage is blocked');
+  storageBlocked = false;
+  stored.set(null, 'second');
+  windowEvents.storage({ key: null, newValue: 'second' });
+  assert.equal(elements.adminSidebarNotificationLink.children.length, 0, 'Read state should sync across tabs');
+
+  hang = true;
+  const pendingRequest = scheduled.shift()();
+  timeoutCallback();
+  await pendingRequest;
+  assert.match(elements.adminNotificationContent.textContent, /temporarily unavailable/, 'Timed-out requests must show an honest failure state');
+  hang = false;
+
   fail = true;
   await scheduled.shift()();
   assert.match(elements.adminNotificationContent.textContent, /temporarily unavailable/, 'Outage should not present old status as current');
@@ -82,5 +118,5 @@ class Element {
   assert.equal(elements.adminSidebarNotificationLink.children.length, 0, 'No activity should clear badge');
   assert.equal(elements.adminNotificationButton.children.length, 0, 'No activity should clear dot');
   assert.equal(scheduled.length, 1, 'Refresh must continue after failures without overlapping requests');
-  console.log('PASS: live refresh messages, read state, new badges, empty state, and outage recovery.');
+  console.log('PASS: refresh messages, read state, blocked storage, cross-tab sync, Escape, timeout, badges, and recovery.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
