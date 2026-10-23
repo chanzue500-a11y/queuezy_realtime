@@ -3,7 +3,7 @@
 // DECIMAL(10, 2), stored as integer cents while calculating fee adjustments.
 const BILLING_MAX_FEE_CENTS = 9999999999;
 
-function billingFeeCents($value): int
+function billingFeeCents(mixed $value): int
 {
     if (!is_string($value) && !is_int($value)) {
         throw new InvalidArgumentException('Enter a valid amount with up to two decimal places.');

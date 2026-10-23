@@ -6,9 +6,23 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
 }
 require_once __DIR__ . '/../database/db.php';
 require_once __DIR__ . '/../includes/queue_report.php';
+require_once __DIR__ . '/../includes/daily_sales.php';
 $conn = $conn ?? null;
 
 $filters = queueReportFilters($_GET);
+$dailyFilters = dailySalesFilters($_GET);
+$dailySales = null;
+$dailySalesError = $dailyFilters['errors'] ? implode(' ', $dailyFilters['errors']) : '';
+if ($conn && $dailySalesError === '') {
+    try {
+        $dailySales = dailySalesData($conn, $dailyFilters);
+    } catch (Throwable $error) {
+        error_log('Daily sales report failed: ' . $error->getMessage());
+        $dailySalesError = 'Unable to load daily sales. Please try again.';
+    }
+} elseif (!$conn) {
+    $dailySalesError = 'Daily sales are temporarily unavailable while the database is offline.';
+}
 $report = null;
 $reportError = '';
 if (!$conn) {
@@ -29,14 +43,26 @@ $rows = $report['rows'] ?? [];
 $page = $report['page'] ?? 1;
 $pages = $report['pages'] ?? 1;
 $escape = static fn($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$salesPageUrl = static function (int $page) use ($dailyFilters, $filters): string {
+    $query = array_diff_key($filters, ['errors' => true]);
+    $query['sales_from'] = $dailyFilters['date_from'];
+    $query['sales_to'] = $dailyFilters['date_to'];
+    $query['sales_page'] = $page;
+    $query['sales_open'] = '1';
+    return 'reports.php?' . http_build_query($query) . '#daily-sales';
+};
+$salesToday = new DateTimeImmutable('today', new DateTimeZone('Asia/Manila'));
+$salesYesterday = $salesToday->modify('-1 day')->format('Y-m-d');
 $dateLabel = static function ($value): string {
     if (!$value) return '—';
     $timestamp = strtotime($value);
     return $timestamp === false ? '—' : date('M j, Y · g:i A', $timestamp);
 };
-$pageUrl = static function (int $target) use ($filters): string {
+$pageUrl = static function (int $target) use ($filters, $dailyFilters): string {
     $query = array_diff_key($filters, ['errors' => true]);
     $query['page'] = $target;
+    $query['sales_from'] = $dailyFilters['date_from'];
+    $query['sales_to'] = $dailyFilters['date_to'];
     return 'reports.php?' . http_build_query(array_filter($query, static fn($value) => $value !== '' && $value !== 0));
 };
 $appliedFilters = [];
@@ -553,7 +579,60 @@ require_once '../includes/header.php';
         </div>
     </header>
 
+    <details class="chart-panel daily-sales-section" id="daily-sales" <?= (($_GET['sales_open'] ?? '') === '1' || $dailySalesError !== '') ? 'open' : '' ?>>
+        <summary class="chart-head daily-sales-toggle">
+            <div>
+                <h2 id="daily-sales-title" class="chart-title">Daily sales</h2>
+                <p class="chart-subtitle">8:30 AM–5:00 PM · Philippine time</p>
+            </div>
+            <span class="daily-sales-toggle-label" aria-hidden="true"></span>
+            <span class="daily-sales-chevron" aria-hidden="true">›</span>
+        </summary>
+        <form class="daily-sales-controls" method="get" action="reports.php#daily-sales" aria-label="Daily sales date range">
+            <input type="hidden" name="sales_open" value="1">
+            <?php foreach (array_diff_key($filters, ['errors' => true]) as $key => $value): ?>
+            <input type="hidden" name="<?= $escape($key) ?>" value="<?= $escape($value) ?>">
+            <?php endforeach; ?>
+            <label>Sales from<input type="date" name="sales_from" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_from']) ?>"></label>
+            <label>Sales through<input type="date" name="sales_to" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_to']) ?>"></label>
+            <button type="submit" class="export-btn">View daily sales</button>
+            <a class="report-reset" href="reports.php?<?= $escape(http_build_query(array_merge(array_diff_key($filters, ['errors' => true]), ['sales_from' => $salesYesterday, 'sales_to' => $salesYesterday, 'sales_open' => '1']))) ?>#daily-sales">Yesterday</a>
+        </form>
+        <?php if ($dailySalesError !== ''): ?>
+        <p class="report-error" role="alert"><?= $escape($dailySalesError) ?></p>
+        <?php elseif ($dailySales !== null): ?>
+        <div class="daily-sales-totals" aria-label="Sales totals for the selected date range">
+            <div><span>Completed tickets · selected dates</span><strong><?= number_format($dailySales['total_tickets']) ?></strong></div>
+            <div><span>Sales · selected dates</span><strong>&#8369;<?= number_format($dailySales['total_sales_cents'] / 100, 2) ?></strong></div>
+        </div>
+        <p class="daily-sales-note">Paid and completed tickets across all departments, grouped by completion date. Tickets outside the daily cutoff are excluded.</p>
+        <div class="daily-sales-table-wrap">
+            <table class="daily-sales-table">
+                <thead><tr><th scope="col">Business date</th><th scope="col">Completed tickets</th><th scope="col">Sales</th></tr></thead>
+                <tbody>
+                    <?php foreach ($dailySales['rows'] as $salesDay): ?>
+                    <tr>
+                        <th scope="row"><?= $escape((new DateTimeImmutable($salesDay['date']))->format('D, M j, Y')) ?><?php if ($salesDay['date'] === $salesToday->format('Y-m-d')): ?> <span class="daily-sales-today">Today · running total</span><?php endif; ?></th>
+                        <td><?= number_format($salesDay['completed_tickets']) ?></td>
+                        <td>&#8369;<?= number_format($salesDay['sales_cents'] / 100, 2) ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <nav class="report-pagination" aria-label="Daily sales pagination">
+            <span><?= number_format($dailySales['days']) ?> days · 10 per page · Page <?= $dailySales['page'] ?> of <?= $dailySales['pages'] ?></span>
+            <div>
+                <?php if ($dailySales['page'] > 1): ?><a class="export-btn" href="<?= $escape($salesPageUrl($dailySales['page'] - 1)) ?>">&lt; Previous</a><?php endif; ?>
+                <?php if ($dailySales['page'] < $dailySales['pages']): ?><a class="export-btn" href="<?= $escape($salesPageUrl($dailySales['page'] + 1)) ?>">Next &gt;</a><?php endif; ?>
+            </div>
+        </nav>
+        <?php endif; ?>
+    </details>
+
     <form class="report-filters" method="get" action="reports.php" aria-label="Filter queue transactions">
+        <input type="hidden" name="sales_from" value="<?= $escape($dailyFilters['date_from']) ?>">
+        <input type="hidden" name="sales_to" value="<?= $escape($dailyFilters['date_to']) ?>">
         <label class="report-search" for="report-search">Search records
             <input type="search" id="report-search" name="search" maxlength="120" value="<?= $escape($filters['search']) ?>" placeholder="Ticket, customer, service, or department">
         </label>
