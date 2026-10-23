@@ -8,12 +8,71 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
   header('Location: ../login.php');
   exit;
 }
+require_once __DIR__ . '/../includes/service_times.php';
 
-$msg = '';
+$serviceTimeCsrf = $_SESSION['service_time_csrf'] ??= bin2hex(random_bytes(32));
+$msg = $_SESSION['service_time_success'] ?? '';
+unset($_SESSION['service_time_success']);
 $msgType = 'success';
+$bulkTimeError = '';
+$bulkTimeDepartment = 0;
+$bulkTimeMinutes = '';
+$bulkTimeSelected = [];
+if (isset($_SESSION['service_bulk_time_preview'])) {
+    $pending = $_SESSION['service_bulk_time_preview'];
+    $bulkTimeDepartment = $pending['department_id'];
+    $bulkTimeMinutes = (string)$pending['minutes'];
+    $bulkTimeSelected = array_column($pending['rows'], 'id');
+}
+$isActionPost = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['action']);
+if ($isActionPost && $_POST['action'] === 'preview_times') {
+    $bulkTimeDepartment = filter_var($_POST['department_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 0;
+    $bulkTimeMinutes = is_string($_POST['minutes'] ?? null) ? $_POST['minutes'] : '';
+    $bulkTimeSelected = [];
+    foreach (is_array($_POST['service_ids'] ?? null) ? array_slice($_POST['service_ids'], 0, SERVICE_TIME_BATCH_LIMIT) : [] as $value) {
+        $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($id !== false) $bulkTimeSelected[] = $id;
+    }
+}
+$validActionToken = is_string($_POST['csrf_token'] ?? null) && hash_equals($serviceTimeCsrf, $_POST['csrf_token']);
+if ($isActionPost && !$validActionToken) {
+    $msg = 'Your session could not be verified. Refresh this page and try again.';
+    $msgType = 'error';
+}
 
 // Handle Server-Side Actions (Create, Update & Delete Services in MySQL)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+if ($isActionPost && $validActionToken) {
+    if (in_array($_POST['action'], ['preview_times', 'apply_times', 'cancel_times'], true)) {
+        try {
+            if ($_POST['action'] === 'cancel_times') {
+                unset($_SESSION['service_bulk_time_preview']);
+                header('Location: services.php#bulk-service-times');
+                exit;
+            }
+            if (!$conn) throw new RuntimeException('The database is unavailable. Please try again.');
+            if ($_POST['action'] === 'preview_times') {
+                unset($_SESSION['service_bulk_time_preview']);
+                if ($bulkTimeDepartment <= 0) throw new InvalidArgumentException('Choose a department to update.');
+                $_SESSION['service_bulk_time_preview'] = serviceTimePreview($conn, $bulkTimeDepartment,
+                    $_POST['service_ids'] ?? null, $_POST['minutes'] ?? null);
+                header('Location: services.php#bulk-time-preview');
+                exit;
+            }
+            $preview = $_SESSION['service_bulk_time_preview'] ?? null;
+            if (!$preview || !is_string($_POST['preview_token'] ?? null) || !hash_equals($preview['token'], $_POST['preview_token'])) {
+                throw new RuntimeException('This preview is no longer available. Generate a new preview before applying.');
+            }
+            $changed = serviceTimeApply($conn, $preview);
+            unset($_SESSION['service_bulk_time_preview']);
+            $_SESSION['service_time_success'] = 'Updated ' . $changed . ($changed === 1 ? ' service' : ' services') . ' to '
+                . $preview['minutes'] . ' minutes in ' . $preview['department_name'] . '.';
+            header('Location: services.php#bulk-service-times');
+            exit;
+        } catch (InvalidArgumentException | RuntimeException $error) {
+            if ($_POST['action'] === 'apply_times') unset($_SESSION['service_bulk_time_preview']);
+            $bulkTimeError = $error->getMessage();
+        }
+    }
     if ($_POST['action'] === 'create' && $conn) {
         $service_name = trim($_POST['service_name'] ?? '');
         $dept_id = (int)($_POST['dept_id'] ?? 0);
@@ -38,25 +97,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
 
-    if ($_POST['action'] === 'update_time' && $conn) {
-      $serviceId = (int)($_POST['service_id'] ?? 0);
-      $estTime = (int)($_POST['estimated_time_mins'] ?? 0);
-      if ($serviceId > 0 && $estTime >= 1 && $estTime <= 120) {
-        $stmt = $conn->prepare('UPDATE services SET estimated_time_mins = ? WHERE id = ?');
-        if ($stmt) {
-          $stmt->bind_param('ii', $estTime, $serviceId);
-          if ($stmt->execute()) {
-            header('Location: services.php?updated=1');
-            exit;
-          }
-          $stmt->close();
-        }
-        $msg = 'We could not update the service time.';
-        $msgType = 'error';
-      } else {
-        $msg = 'Please enter a queue time between 1 and 120 minutes.';
-        $msgType = 'error';
-      }
+    if ($_POST['action'] === 'update_time') {
+      $msg = 'Use Bulk update processing time to review and apply service time changes.';
+      $msgType = 'error';
     }
 
     if ($_POST['action'] === 'delete' && $conn) {
@@ -187,6 +230,10 @@ foreach ($serviceList as $service) {
     }
     $serviceGroups[$departmentId]['services'][] = $service;
 }
+$bulkTimePreview = $_SESSION['service_bulk_time_preview'] ?? null;
+$bulkTimeDepartments = array_filter($deptList, static fn($department) => isset($serviceGroups[(int)$department['id']]));
+$bulkTimeCheckedCount = count(array_filter($serviceList, static fn($service) => (int)$service['dept_id'] === $bulkTimeDepartment && in_array((int)$service['id'], $bulkTimeSelected, true)));
+$escape = static fn($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
 $pageTitle = 'Services | Queuezy Admin'; 
 $pageHeading = 'Services Catalog'; 
@@ -194,94 +241,70 @@ require_once '../includes/header.php';
 ?>
 
 <link rel="stylesheet" href="../assets/css/admin-directory.css">
+<link rel="stylesheet" href="../assets/css/service-bulk-times.css">
 
 <!-- Embedded Custom CSS for Senior-Grade UI/UX & Micro-interactions -->
 <style>
-  .stat-card-luxury {
-    position: relative;
-    overflow: hidden;
-    background: #ffffff;
-    border: 1px solid #ece9f4;
-    border-radius: 20px;
-    padding: 24px;
-    transition: background-color 0.2s ease, border-color 0.2s ease;
-    box-shadow: 0 4px 20px -2px rgba(57, 35, 97, 0.04);
-  }
-  .stat-card-luxury:hover {
-    background: #faf5ff;
-    border-color: #d8b4fe;
-  }
-
-  .service-card-lux {
-    background: #ffffff;
-    border: 1px solid #ece9f4;
-    border-radius: 20px;
-    padding: 24px;
+  .service-directory-card {
     display: flex;
     flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+    padding: 20px;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #ffffff;
+    color: #0f172a;
+  }
+  .service-directory-title {
+    flex: 1;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .service-directory-footer {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    transition: background-color 0.2s ease, border-color 0.2s ease;
-    box-shadow: 0 4px 20px -2px rgba(57, 35, 97, 0.03);
-    position: relative;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid #e2e8f0;
   }
-  .service-card-lux:hover {
-    background: #faf5ff;
-    border-color: #d8b4fe;
+  .service-directory-duration { display: grid; gap: 4px; }
+  .service-directory-duration > span { display: flex; align-items: center; gap: 6px; color: #64748b; font-size: 11px; line-height: 1.4; }
+  .service-directory-duration svg { width: 13px; height: 13px; }
+  .service-directory-duration strong { color: #334155; font-size: 16px; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+  .service-directory-duration strong span { font-size: 12px; font-weight: 500; }
+  .service-directory-footer form { margin: 0; }
+  .service-directory-card .service-directory-delete {
+    --directory-surface: transparent;
+    --directory-border: #e2e8f0;
+    --directory-text: #b91c1c;
+    --directory-hover: #fef2f2;
+    --directory-hover-border: #fecaca;
+    --directory-purple: #b91c1c;
+    min-height: 44px;
+    padding: 10px 12px;
   }
-  body.dark-mode .service-card-lux,
-  body.dark-mode .stat-card-luxury {
-    background: #1e293b;
-    border-color: #334155;
-    color: #f8fafc;
+  html.dark-mode .service-directory-card,
+  body.dark-mode .service-directory-card { background: #1e293b; border-color: #334155; color: #f8fafc; }
+  html.dark-mode .service-directory-footer,
+  body.dark-mode .service-directory-footer { border-color: #334155; }
+  html.dark-mode .service-directory-duration > span,
+  body.dark-mode .service-directory-duration > span { color: #94a3b8; }
+  html.dark-mode .service-directory-duration strong,
+  body.dark-mode .service-directory-duration strong { color: #e2e8f0; }
+  html.dark-mode .service-directory-card .service-directory-delete,
+  body.dark-mode .service-directory-card .service-directory-delete {
+    --directory-border: #475569;
+    --directory-text: #fca5a5;
+    --directory-hover: #451a1a;
+    --directory-hover-border: #991b1b;
+    --directory-purple: #fca5a5;
   }
-  body.dark-mode .queue-content .service-card-lux:hover,
-  body.dark-mode .queue-content .stat-card-luxury:hover {
-    background: #2a2240 !important;
-    border-color: #8b5cf6 !important;
-  }
-  body.dark-mode .service-card-lux h3,
-  body.dark-mode .service-card-lux .font-black.text-slate-900 {
-    color: #f8fafc !important;
-  }
-  body.dark-mode .service-card-lux .text-slate-500 {
-    color: #cbd5e1 !important;
-  }
-  body.dark-mode .service-card-lux .bg-slate-50 {
-    background: #273449 !important;
-    border-color: #475569 !important;
-  }
-  body.dark-mode .service-card-lux .border-slate-100 {
-    border-color: #475569 !important;
-  }
-  body.dark-mode .service-card-lux .bg-purple-50 {
-    background: #2e1b52 !important;
-    color: #d8b4fe !important;
-    border-color: #6d28d9 !important;
-  }
-  body.dark-mode .service-card-lux .bg-purple-50:hover {
-    background: #3b2466 !important;
-  }
-  body.dark-mode .service-card-lux .bg-red-50 {
-    background: #451a1a !important;
-    color: #fca5a5 !important;
-    border-color: #991b1b !important;
-  }
-  body.dark-mode .service-card-lux .bg-red-50:hover {
-    background: #5b2020 !important;
-  }
-  body.dark-mode .service-metrics .bg-purple-50 {
-    background: #2e1b52 !important;
-  }
-  body.dark-mode .service-metrics .bg-indigo-50 {
-    background: #1e1b4b !important;
-  }
-  body.dark-mode .service-metrics .bg-emerald-50 {
-    background: #052e2b !important;
-  }
-  body.dark-mode .service-metrics .bg-amber-50 {
-    background: #422006 !important;
-  }
-
   .service-groups { display: grid; gap: 16px; }
   .service-group {
     min-width: 0;
@@ -322,30 +345,35 @@ require_once '../includes/header.php';
   .service-group-count { flex-shrink: 0; color: #7c3aed; font-size: 12px; font-weight: 700; }
   .service-group-chevron { flex-shrink: 0; width: 20px; height: 20px; transition: transform 0.2s ease; }
   .service-group[open] > .service-group-summary .service-group-chevron { transform: rotate(180deg); }
-  .service-group-content { padding: 24px; border-top: 1px solid #ece9f4; }
-  body.dark-mode .service-group { background: #1e293b; border-color: #334155; }
-  body.dark-mode .service-group:hover { border-color: #8b5cf6; }
-  body.dark-mode .service-group-summary { color: #f8fafc; }
-  body.dark-mode .service-group-summary:hover { background: #2a2240; }
-  body.dark-mode .service-group-icon { background: #2e1b52; color: #d8b4fe; }
-  body.dark-mode .service-group-code { color: #cbd5e1; }
-  body.dark-mode .service-group-count { color: #d8b4fe; }
-  body.dark-mode .service-group-content { border-color: #334155; }
+  .service-group-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+    gap: 16px;
+    align-items: stretch;
+    padding: 20px;
+    border-top: 1px solid #ece9f4;
+  }
+  html.dark-mode .service-group, body.dark-mode .service-group { background: #1e293b; border-color: #334155; }
+  html.dark-mode .service-group:hover, body.dark-mode .service-group:hover { border-color: #8b5cf6; }
+  html.dark-mode .service-group-summary, body.dark-mode .service-group-summary { color: #f8fafc; }
+  html.dark-mode .service-group-summary:hover, body.dark-mode .service-group-summary:hover { background: #2a2240; }
+  html.dark-mode .service-group-icon, body.dark-mode .service-group-icon { background: #2e1b52; color: #d8b4fe; }
+  html.dark-mode .service-group-code, body.dark-mode .service-group-code { color: #cbd5e1; }
+  html.dark-mode .service-group-count, body.dark-mode .service-group-count { color: #d8b4fe; }
+  html.dark-mode .service-group-content, body.dark-mode .service-group-content { border-color: #334155; }
   @media (max-width: 640px) {
     .service-group-summary { padding: 16px; gap: 10px; }
     .service-group-content { padding: 16px; }
-    .service-group-name { font-size: 13px; }
+    .service-group-name { font-size: 14px; }
+    .service-directory-card { padding: 16px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .stat-card-luxury,
-    .service-card-lux,
     .service-group,
     .service-group-summary,
     .service-group-chevron { transition: none; }
   }
 
   .hidden { display: none !important; }
-  #confirmTimeModal.hidden { display: none !important; }
 
   /* Toast Notification */
   .toast-container {
@@ -389,76 +417,88 @@ require_once '../includes/header.php';
 </div>
 
 <?php if ($msg): ?>
-<div class="mb-6 p-4 rounded-2xl border <?= $msgType === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700' ?> font-semibold text-xs flex items-center gap-2">
+<div role="<?= $msgType === 'error' ? 'alert' : 'status' ?>" class="mb-6 p-4 rounded-2xl border <?= $msgType === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700' ?> font-semibold text-xs flex items-center gap-2">
   <i data-feather="<?= $msgType === 'error' ? 'alert-circle' : 'check-circle' ?>" class="w-4 h-4"></i>
   <span><?= htmlspecialchars($msg) ?></span>
 </div>
 <?php endif; ?>
 
-<!-- Executive Metric Cards -->
-<div class="service-metrics grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 mb-8">
-  <div class="stat-card-luxury">
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Services</span>
-      <div class="w-10 h-10 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center">
-        <i class="fa-solid fa-briefcase" style="font-size: 20px;" aria-hidden="true"></i>
+<section class="service-time-bulk" id="bulk-service-times" aria-labelledby="bulk-service-times-title">
+  <h2 id="bulk-service-times-title">Bulk update processing time</h2>
+  <p class="service-time-help" id="bulk-service-times-help">Select services from one department and review their new processing time before applying.</p>
+  <?php if ($bulkTimeError !== '' || !$conn): ?>
+  <p class="service-time-alert" role="alert"><?= $escape($bulkTimeError ?: 'The database is unavailable. Please try again.') ?></p>
+  <?php endif; ?>
+  <form id="bulkServiceTimesForm" method="post" action="services.php#bulk-service-times" data-no-transition="true" data-limit="<?= SERVICE_TIME_BATCH_LIMIT ?>" data-unavailable="<?= !$conn || !$bulkTimeDepartments ? 'true' : 'false' ?>" aria-describedby="bulk-service-times-help">
+    <input type="hidden" name="action" value="preview_times">
+    <input type="hidden" name="csrf_token" value="<?= $escape($serviceTimeCsrf) ?>">
+    <div class="service-time-fields">
+      <label for="bulkTimeDepartment">Department
+        <select id="bulkTimeDepartment" name="department_id" required>
+          <option value="">Select department</option>
+          <?php foreach ($bulkTimeDepartments as $department): ?>
+          <option value="<?= (int)$department['id'] ?>" <?= (int)$department['id'] === $bulkTimeDepartment ? 'selected' : '' ?>><?= $escape($department['dept_name']) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </label>
+      <label for="bulkTimeMinutes">New processing time (min)
+        <input id="bulkTimeMinutes" name="minutes" type="number" min="1" max="120" step="1" inputmode="numeric" placeholder="1–120 minutes" value="<?= $escape($bulkTimeMinutes) ?>" required>
+      </label>
+    </div>
+    <fieldset class="service-time-picker">
+      <legend class="sr-only">Select services to update</legend>
+      <div class="service-time-picker-head">
+        <label><input type="checkbox" id="bulkTimeSelectAll" <?= !$bulkTimeDepartment ? 'disabled' : '' ?>> Select all</label>
+        <span id="bulkTimeSelectedCount" role="status"><?= $bulkTimeCheckedCount ?> selected</span>
       </div>
-    </div>
-    <div class="mt-3">
-      <h3 class="text-3xl font-black text-slate-900"><?= count($serviceList) ?></h3>
-      <p class="text-xs text-slate-500 mt-2 flex items-center gap-1">
-        <i data-feather="check-circle" class="w-3.5 h-3.5 text-emerald-500"></i>
-        <span>Active services</span>
-      </p>
-    </div>
-  </div>
-
-  <div class="stat-card-luxury">
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Departments Listed</span>
-      <div class="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-        <i class="fa-solid fa-layer-group" style="font-size: 20px;" aria-hidden="true"></i>
+      <div class="service-time-options" id="bulkTimeServiceOptions">
+        <p id="bulkTimeEmpty" <?= isset($serviceGroups[$bulkTimeDepartment]) ? 'hidden' : '' ?>><?= $bulkTimeDepartments ? 'Choose a department to select services.' : 'No services are available to update.' ?></p>
+        <?php foreach ($serviceList as $service): ?>
+        <?php $inTimeDepartment = (int)$service['dept_id'] === $bulkTimeDepartment; ?>
+        <label class="service-time-option" data-department="<?= (int)$service['dept_id'] ?>" <?= !$inTimeDepartment ? 'hidden' : '' ?>>
+          <input type="checkbox" name="service_ids[]" value="<?= (int)$service['id'] ?>" <?= !$inTimeDepartment ? 'disabled' : '' ?> <?= $inTimeDepartment && in_array((int)$service['id'], $bulkTimeSelected, true) ? 'checked' : '' ?>>
+          <span><?= $escape($service['service_name']) ?></span>
+          <small><?= (int)$service['estimated_time_mins'] ?> min</small>
+        </label>
+        <?php endforeach; ?>
       </div>
+    </fieldset>
+    <div class="service-time-form-actions">
+      <button class="directory-button directory-button--primary" id="bulkTimePreviewButton" type="submit" <?= !$conn || !$bulkTimeCheckedCount ? 'disabled' : '' ?>>Preview changes</button>
     </div>
-    <div class="mt-3">
-      <h3 class="text-3xl font-black text-indigo-600"><?= count($deptList) ?></h3>
-      <p class="text-xs text-slate-500 mt-2">Active queue divisions</p>
+  </form>
+  <?php if ($bulkTimePreview): ?>
+  <div class="service-time-preview" id="bulk-time-preview" aria-labelledby="bulk-time-preview-title">
+    <h3 id="bulk-time-preview-title">Review changes</h3>
+    <p class="service-time-help"><?= $escape($bulkTimePreview['department_name']) ?> &middot; <?= count($bulkTimePreview['rows']) ?> selected &middot; <?= $bulkTimePreview['changed'] ?> will change</p>
+    <div class="service-time-preview-scroll" tabindex="0" role="region" aria-label="Processing time changes">
+      <table>
+        <thead><tr><th scope="col">Service</th><th scope="col">Current time</th><th scope="col">New time</th></tr></thead>
+        <tbody>
+          <?php foreach ($bulkTimePreview['rows'] as $row): ?>
+          <tr>
+            <td><?= $escape($row['service_name']) ?></td>
+            <td><?= $row['current'] ?> min</td>
+            <td class="service-time-new"><?= $bulkTimePreview['minutes'] ?> min<?= $row['current'] === $bulkTimePreview['minutes'] ? ' (unchanged)' : '' ?></td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
     </div>
+    <p class="service-time-preview-changed" id="bulkTimePreviewChanged" role="status" <?= !$isActionPost ? 'hidden' : '' ?>>Settings changed. Preview again before applying.</p>
+    <form class="service-time-preview-actions" id="bulkTimeApplyForm" method="post" action="services.php#bulk-service-times" data-no-transition="true">
+      <input type="hidden" name="csrf_token" value="<?= $escape($serviceTimeCsrf) ?>">
+      <input type="hidden" name="preview_token" value="<?= $escape($bulkTimePreview['token']) ?>">
+      <button class="directory-button directory-button--primary" id="bulkTimeApplyButton" type="submit" name="action" value="apply_times" <?= $isActionPost ? 'disabled' : '' ?>>Apply changes</button>
+      <button class="directory-button" type="submit" name="action" value="cancel_times">Cancel</button>
+    </form>
   </div>
-
-  <div class="stat-card-luxury">
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Processing Time</span>
-      <div class="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-        <i class="fa-solid fa-clock" style="font-size: 20px;" aria-hidden="true"></i>
-      </div>
-    </div>
-    <div class="mt-3">
-      <?php 
-        $avgTime = count($serviceList) > 0 ? round(array_sum(array_column($serviceList, 'estimated_time_mins')) / count($serviceList), 1) : 0;
-      ?>
-      <h3 class="text-3xl font-black text-slate-900"><?= $avgTime ?> <span class="text-sm font-semibold text-slate-400">mins</span></h3>
-      <p class="text-xs text-emerald-600 font-semibold mt-2">Estimated queue SLA</p>
-    </div>
-  </div>
-
-  <div class="stat-card-luxury">
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">System Status</span>
-      <div class="w-10 h-10 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
-        <i class="fa-solid fa-circle-check" style="font-size: 20px;" aria-hidden="true"></i>
-      </div>
-    </div>
-    <div class="mt-3">
-      <h3 class="text-3xl font-black text-emerald-600">Active</h3>
-      <p class="text-xs text-slate-500 mt-2">Service catalog online</p>
-    </div>
-  </div>
-</div>
+  <?php endif; ?>
+</section>
 
 <!-- Toolbar & Search -->
 <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm mb-8 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-  <p class="text-sm text-slate-500">Select a department to view its services.</p>
+  <p class="text-sm text-slate-500">Open a department to browse its services.</p>
   <div class="relative flex-1 max-w-md md:ml-auto">
     <i data-feather="search" class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
     <input type="search" id="serviceSearchInput" oninput="filterServices()" aria-label="Search services or departments" placeholder="Search service name or department..." class="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-purple-500 focus:bg-white transition">
@@ -487,48 +527,26 @@ require_once '../includes/header.php';
       <span class="service-group-count" data-total="<?= count($group['services']) ?>"><?= count($group['services']) ?> <?= count($group['services']) === 1 ? 'service' : 'services' ?></span>
       <i data-feather="chevron-down" class="service-group-chevron" aria-hidden="true"></i>
     </summary>
-    <div class="service-group-content grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <div class="service-group-content">
   <?php foreach ($group['services'] as $s): ?>
-  <div class="service-card-lux service-item" data-name="<?= htmlspecialchars(strtolower($s['service_name'])) ?>" data-dept="<?= htmlspecialchars(strtolower($group['name'] . ' ' . $group['code'])) ?>">
-    <div>
-      <div class="flex items-center justify-between mb-4">
-        <span class="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-purple-50 text-purple-700 border border-purple-200">
-          <?= htmlspecialchars($s['dept_name'] ?? 'General') ?> (<?= htmlspecialchars($s['dept_code'] ?? 'ID ' . $s['dept_id']) ?>)
-        </span>
+  <article class="service-directory-card service-item" data-name="<?= $escape(strtolower($s['service_name'])) ?>" data-dept="<?= $escape(strtolower($group['name'] . ' ' . $group['code'])) ?>" aria-labelledby="service-title-<?= (int)$s['id'] ?>">
+    <h3 class="service-directory-title" id="service-title-<?= (int)$s['id'] ?>"><?= $escape($s['service_name']) ?></h3>
+    <div class="service-directory-footer">
+      <div class="service-directory-duration">
+        <span><i data-feather="clock" aria-hidden="true"></i> Estimated time</span>
+        <strong><?= (int)$s['estimated_time_mins'] ?> <span>min</span></strong>
       </div>
-
-      <h3 class="text-lg font-black text-slate-900 mb-2"><?= htmlspecialchars($s['service_name']) ?></h3>
-      <p class="text-xs text-slate-500 mb-4">Official service processing line.</p>
-
-      <div class="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-slate-50 mb-4 border border-slate-100">
-        <span class="text-slate-500 font-semibold flex items-center gap-1.5">
-          <i data-feather="clock" class="w-3.5 h-3.5 text-purple-600"></i> Est. Processing Time:
-        </span>
-        <span class="font-black text-slate-900"><?= (int)$s['estimated_time_mins'] ?> mins</span>
-      </div>
-    </div>
-
-    <div class="pt-4 border-t border-slate-100 flex items-center justify-between mt-2">
-      <span class="text-xs font-bold text-emerald-600 flex items-center gap-1.5">
-        <span class="w-2 h-2 rounded-full bg-emerald-500"></span> Active
-      </span>
-
-      <div class="flex items-center gap-2">
-        <button type="button" class="edit-service-time-btn directory-button" title="Edit queue time" data-service-id="<?= (int)$s['id'] ?>" data-estimated-time="<?= (int)$s['estimated_time_mins'] ?>" data-service-name="<?= htmlspecialchars((string)($s['service_name'] ?? ''), ENT_QUOTES) ?>">
-          <i data-feather="edit-3" class="w-3.5 h-3.5"></i>
-          <span>EDIT</span>
-        </button>
-        <form method="post" class="inline delete-service-form" data-service-name="<?= htmlspecialchars((string)($s['service_name'] ?? ''), ENT_QUOTES) ?>">
+      <form method="post" class="delete-service-form" data-service-name="<?= $escape($s['service_name']) ?>">
         <input type="hidden" name="action" value="delete">
-        <input type="hidden" name="service_id" value="<?= $s['id'] ?>">
-        <button type="submit" class="directory-button directory-button--danger" title="Delete Service">
-          <i data-feather="trash-2" class="w-3.5 h-3.5"></i>
-          <span>DELETE</span>
+        <input type="hidden" name="csrf_token" value="<?= $escape($serviceTimeCsrf) ?>">
+        <input type="hidden" name="service_id" value="<?= (int)$s['id'] ?>">
+        <button type="submit" class="directory-button service-directory-delete" aria-label="Delete <?= $escape($s['service_name']) ?>">
+          <i data-feather="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i>
+          <span>Delete</span>
         </button>
-        </form>
-      </div>
+      </form>
     </div>
-  </div>
+  </article>
   <?php endforeach; ?>
     </div>
   </details>
@@ -538,56 +556,10 @@ require_once '../includes/header.php';
 <div id="servicePagination" class="directory-pagination"></div>
 <?php endif; ?>
 
-<!-- Edit Service Time Modal -->
-<div id="editTimeModal" class="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
-  <div class="w-full max-w-xl rounded-[28px] border border-slate-700/80 bg-[#1a2237] p-6 shadow-[0_30px_80px_rgba(15,23,42,0.7)] ring-1 ring-white/5">
-    <div class="mb-6">
-      <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-purple-300/80">Queue Time</p>
-      <h3 class="mt-2 text-2xl font-black tracking-tight text-white">Edit Queue Time</h3>
-    </div>
-
-    <p id="editTimeServiceName" class="mb-4 text-sm font-medium text-slate-300">Update service processing time.</p>
-
-    <form method="post" class="space-y-5" id="editTimeForm">
-      <input type="hidden" name="action" value="update_time">
-      <input type="hidden" name="service_id" id="editTimeServiceId">
-
-      <div>
-        <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-300" for="editTimeInput">Estimated Time (Minutes)</label>
-        <div class="relative">
-          <input type="number" name="estimated_time_mins" id="editTimeInput" required min="1" max="120" class="w-full rounded-2xl border border-slate-600 bg-slate-900/80 px-4 py-3.5 pr-12 text-xl font-black text-white shadow-inner outline-none transition focus:border-purple-400 focus:ring-2 focus:ring-purple-500/30" inputmode="numeric">
-          <div class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400">
-            <i data-feather="clock" class="h-4 w-4"></i>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex justify-end gap-3 pt-2">
-        <button type="button" onclick="closeEditTimeModal()" class="directory-button">Cancel</button>
-        <button type="submit" class="directory-button directory-button--primary">Save Time</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Save Time Confirmation -->
-<div id="confirmTimeModal" class="fixed inset-0 z-[60] bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
-  <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
-    <div class="w-11 h-11 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center mb-4">
-      <i class="fa-solid fa-clock" aria-hidden="true"></i>
-    </div>
-    <h3 class="text-lg font-black text-white">Save queue time?</h3>
-    <p class="text-sm text-slate-300 mt-2">Update <strong id="confirmTimeServiceName" class="text-white"></strong> with the new processing time?</p>
-    <div class="flex justify-end gap-2 mt-6">
-      <button type="button" onclick="closeConfirmTimeModal()" class="directory-button">Cancel</button>
-      <button type="button" onclick="submitEditTimeForm()" class="directory-button directory-button--primary">Save Time</button>
-    </div>
-  </div>
-</div>
-
 <div class="toast-container" id="toastBox"></div>
 
 <script src="../assets/js/directory-pagination.js"></script>
+<script src="../assets/js/service-bulk-times.js" defer></script>
 <script>
   let servicePagination = null;
 
@@ -637,33 +609,6 @@ require_once '../includes/header.php';
     }
   }
 
-  function openEditTimeModal(serviceId, estimatedTime, serviceName) {
-    document.getElementById('editTimeServiceId').value = serviceId;
-    document.getElementById('editTimeInput').value = estimatedTime;
-    document.getElementById('editTimeServiceName').textContent = serviceName;
-    document.getElementById('editTimeModal').classList.remove('hidden');
-    if (typeof feather !== 'undefined') feather.replace();
-    document.getElementById('editTimeInput').focus();
-  }
-
-  function closeEditTimeModal() {
-    document.getElementById('editTimeModal').classList.add('hidden');
-  }
-
-  function openConfirmTimeModal() {
-    document.getElementById('confirmTimeServiceName').textContent = document.getElementById('editTimeServiceName').textContent;
-    document.getElementById('confirmTimeModal').classList.remove('hidden');
-  }
-
-  function closeConfirmTimeModal() {
-    document.getElementById('confirmTimeModal').classList.add('hidden');
-  }
-
-  function submitEditTimeForm() {
-    closeConfirmTimeModal();
-    document.getElementById('editTimeForm').submit();
-  }
-
   function showToast(msg) {
     const toastBox = document.getElementById('toastBox');
     const toast = document.createElement('div');
@@ -696,36 +641,23 @@ require_once '../includes/header.php';
       queueMenu.addEventListener('click', () => queueSidebar.classList.toggle('is-open'));
     }
 
-    document.querySelectorAll('.edit-service-time-btn').forEach((button) => {
-      button.addEventListener('click', () => {
-        openEditTimeModal(
-          Number(button.dataset.serviceId),
-          Number(button.dataset.estimatedTime),
-          button.dataset.serviceName || 'Service'
-        );
-      });
-    });
-
     document.querySelectorAll('.delete-service-form').forEach((form) => {
       form.addEventListener('submit', (event) => {
         const serviceName = form.dataset.serviceName || 'this service';
         if (!window.confirm(`Permanently delete service ${serviceName}?`)) {
           event.preventDefault();
+          return;
         }
+        form.dataset.confirmed = 'true';
       });
-    });
-
-    document.getElementById('editTimeForm')?.addEventListener('submit', (event) => {
-      event.preventDefault();
-      openConfirmTimeModal();
     });
 
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('created')) {
-      showToast('Service created and saved in MySQL!');
+      showToast('Service added.');
     }
     if (urlParams.has('deleted')) {
-      showToast('Service deleted from MySQL database.');
+      showToast('Service deleted.');
     }
   });
 </script>

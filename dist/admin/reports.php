@@ -21,13 +21,6 @@ if (!$conn) {
         $reportError = 'Unable to load transaction records. Please try again.';
     }
 }
-$summary = $report['summary'] ?? [];
-$totalQueueCount = (int)($summary['total_count'] ?? 0);
-$completedQueueCount = (int)($summary['completed_count'] ?? 0);
-$waitingQueueCount = (int)($summary['waiting_count'] ?? 0);
-$servingQueueCount = (int)($summary['serving_count'] ?? 0);
-$cancelledQueueCount = (int)($summary['cancelled_count'] ?? 0);
-$noShowQueueCount = (int)($summary['no_show_count'] ?? 0);
 $departmentCounts = array_column($report['department_counts'] ?? [], 'ticket_count');
 $maxDepartmentTickets = max($departmentCounts ?: [0]);
 $rows = $report['rows'] ?? [];
@@ -603,65 +596,6 @@ require_once '../includes/header.php';
     <div class="report-error" role="alert"><?= $escape($reportError !== '' ? $reportError : implode(' ', $filters['errors'])) ?></div>
     <?php endif; ?>
     <?php if ($reportError === '' && !$filters['errors']): ?>
-    <section class="report-kpis" aria-label="Performance metrics">
-        <article class="kpi-card">
-            <div class="kpi-top">
-                <span class="kpi-label">Total Queues</span>
-            </div>
-            <div class="kpi-value">
-                <strong><?= number_format($totalQueueCount) ?></strong>
-                <span>tickets</span>
-            </div>
-            <p class="kpi-meta"><?= number_format($waitingQueueCount) ?> waiting · <?= number_format($servingQueueCount) ?> called / serving</p>
-        </article>
-
-        <article class="kpi-card completed-kpi">
-            <div class="kpi-top">
-                <span class="kpi-label">Completed</span>
-            </div>
-            <div class="kpi-value">
-                <strong><?= number_format($completedQueueCount) ?></strong>
-                <span>served</span>
-            </div>
-            <p class="kpi-meta positive"><?= $totalQueueCount > 0 ? number_format($completedQueueCount / $totalQueueCount * 100, 1) : '0.0' ?>% of matching tickets</p>
-        </article>
-
-        <article class="kpi-card">
-            <div class="kpi-top">
-                <span class="kpi-label">Cancelled</span>
-            </div>
-            <div class="kpi-value">
-                <strong><?= number_format($cancelledQueueCount) ?></strong>
-                <span>tickets</span>
-            </div>
-            <p class="kpi-meta">canceled tickets</p>
-        </article>
-
-        <article class="kpi-card">
-            <div class="kpi-top">
-                <span class="kpi-label">No Show</span>
-            </div>
-            <div class="kpi-value">
-                <strong><?= number_format($noShowQueueCount) ?></strong>
-                <span>tickets</span>
-            </div>
-            <p class="kpi-meta">marked as no show</p>
-        </article>
-    </section>
-
-    <section class="financial-summary" aria-label="Financial summary">
-        <div class="financial-summary__card">
-            <span class="financial-summary__label">Collected income</span>
-            <div class="financial-summary__value">&#8369;<?= number_format((float)$summary['total_income'], 2) ?></div>
-            <p class="kpi-meta"><?= number_format((int)$summary['paid_count']) ?> paid payments</p>
-        </div>
-        <div class="financial-summary__card">
-            <span class="financial-summary__label">Pending recorded payments</span>
-            <div class="financial-summary__value">&#8369;<?= number_format((float)$summary['pending_amount'], 2) ?></div>
-            <p class="kpi-meta"><?= number_format((int)$summary['pending_count']) ?> pending payments</p>
-        </div>
-    </section>
-
     <section class="chart-panel" aria-labelledby="department-report-title">
         <div class="chart-head">
             <div>

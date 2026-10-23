@@ -1,0 +1,173 @@
+.service-time-bulk {
+  margin-bottom: 32px;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-top: 2px solid #8b5cf6;
+  border-radius: 20px;
+  background: #fff;
+  color: #0f172a;
+  scroll-margin-top: 20px;
+}
+.service-time-bulk h2,
+.service-time-bulk h3 {
+  margin: 0 0 8px;
+  color: inherit;
+  font-size: 18px;
+  font-weight: 800;
+}
+.service-time-help {
+  margin: 0 0 20px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.service-time-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  max-width: 760px;
+  margin-bottom: 20px;
+}
+.service-time-fields label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+.service-time-fields select,
+.service-time-fields input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #0f172a;
+  font: inherit;
+  font-weight: 400;
+}
+.service-time-bulk input:focus-visible,
+.service-time-bulk select:focus-visible,
+.service-time-bulk button:focus-visible {
+  outline: 2px solid #a78bfa;
+  outline-offset: 3px;
+}
+.service-time-bulk input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: #7c3aed;
+  cursor: pointer;
+}
+.service-time-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.service-time-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  font-size: 12px;
+}
+.service-time-picker-head label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.service-time-picker-head > span { color: #64748b; }
+.service-time-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  max-height: 260px;
+  padding: 10px;
+  overflow: auto;
+}
+.service-time-options > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 6px;
+  color: #64748b;
+  font-size: 13px;
+}
+.service-time-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.service-time-option:hover { background: #f5f3ff; }
+.service-time-option > span { flex: 1; overflow-wrap: anywhere; }
+.service-time-option small { flex-shrink: 0; color: #64748b; font-size: 11px; }
+.service-time-form-actions,
+.service-time-preview-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.service-time-form-actions { justify-content: flex-end; }
+.service-time-bulk button:disabled { opacity: 0.5; cursor: not-allowed; }
+.service-time-alert {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.service-time-preview { margin-top: 24px; padding-top: 22px; border-top: 1px solid #e2e8f0; scroll-margin-top: 20px; }
+.service-time-preview-scroll { max-height: 320px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+.service-time-preview table { width: 100%; min-width: 450px; border-collapse: collapse; text-align: left; }
+.service-time-preview th,
+.service-time-preview td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }
+.service-time-preview th { position: sticky; top: 0; background: #f8fafc; color: #64748b; font-size: 11px; font-weight: 700; }
+.service-time-preview tbody tr:last-child td { border-bottom: 0; }
+.service-time-preview th:not(:first-child),
+.service-time-preview td:not(:first-child) { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.service-time-new { color: #7c3aed; font-weight: 700; }
+.service-time-preview-changed { margin: 14px 0 0; color: #b45309; font-size: 13px; }
+.service-time-bulk [hidden] { display: none !important; }
+body.dark-mode .service-time-bulk { background: #1e293b; border-color: #334155; border-top-color: #8b5cf6; color: #f8fafc; }
+body.dark-mode .service-time-fields label { color: #cbd5e1; }
+body.dark-mode .service-time-help,
+body.dark-mode .service-time-picker-head > span,
+body.dark-mode .service-time-option small,
+body.dark-mode .service-time-options > p { color: #94a3b8; }
+body.dark-mode .service-time-fields select,
+body.dark-mode .service-time-fields input { background: #0f172a; border-color: #475569; color: #f8fafc; }
+body.dark-mode .service-time-picker,
+body.dark-mode .service-time-picker-head,
+body.dark-mode .service-time-preview,
+body.dark-mode .service-time-preview-scroll,
+body.dark-mode .service-time-preview th,
+body.dark-mode .service-time-preview td { border-color: #334155; }
+body.dark-mode .service-time-picker-head,
+body.dark-mode .service-time-preview th { background: #172238; color: #cbd5e1; }
+body.dark-mode .service-time-option:hover { background: #29344c; }
+body.dark-mode .service-time-new { color: #c4b5fd; }
+body.dark-mode .service-time-alert { background: #451a1a; color: #fca5a5; }
+body.dark-mode .service-time-preview-changed { color: #fcd34d; }
+@media (max-width: 700px) {
+  .service-time-bulk { padding: 20px 16px; }
+  .service-time-fields,
+  .service-time-options { grid-template-columns: 1fr; }
+  .service-time-form-actions > button { width: 100%; justify-content: center; }
+}
