@@ -3,7 +3,7 @@ require_once '../database/db.php';
 $conn = $conn ?? null;
 require_once '../includes/profile_photo.php';
 require_once '../includes/user_presence.php';
-require_once '../includes/customer_archive.php';
+require_once __DIR__ . '/../includes/user_accounts.php';
 if (session_status() === PHP_SESSION_NONE) {
   session_start();
 }
@@ -13,31 +13,20 @@ if (!$isAdmin) {
   exit;
 }
 
-$archiveCsrfToken = $_SESSION['customer_archive_csrf'] ??= bin2hex(random_bytes(32));
-$archiveAvailable = $conn && ensureCustomerArchivesTable($conn);
-$initialFilter = in_array($_GET['view'] ?? '', ['all', 'admin', 'staff', 'customer', 'archived'], true)
+$usersCsrfToken = $_SESSION['users_csrf'] ??= bin2hex(random_bytes(32));
+$initialFilter = in_array($_GET['view'] ?? '', ['all', 'admin', 'staff', 'customer'], true)
     ? $_GET['view'] : 'all';
 
-// Handle server-side account and customer archive actions.
+// Handle server-side account actions.
 $msg = '';
 $msgType = 'success';
 
-$validActionToken = is_string($_POST['csrf_token'] ?? null) && hash_equals($archiveCsrfToken, $_POST['csrf_token']);
+$validActionToken = is_string($_POST['csrf_token'] ?? null) && hash_equals($usersCsrfToken, $_POST['csrf_token']);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && !$validActionToken) {
     $msg = 'Your session has expired. Refresh this page and try again.';
     $msgType = 'error';
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $validActionToken) {
-    if (in_array($_POST['action'], ['archive_customers', 'restore_customers'], true)) {
-        $archive = $_POST['action'] === 'archive_customers';
-        $result = setCustomerArchiveState($conn, is_array($_POST['user_ids'] ?? null) ? $_POST['user_ids'] : [], $archive);
-        if ($result['ok']) {
-            header('Location: users.php?view=' . ($archive ? 'customer' : 'archived') . '&' . ($archive ? 'archived' : 'restored') . '=' . (int)$result['affected']);
-            exit;
-        }
-        $msg = $result['message'];
-        $msgType = 'error';
-    }
     if ($_POST['action'] === 'create' && $conn && $isAdmin) {
         $fullname = trim($_POST['fullname'] ?? '');
         $email = trim($_POST['email'] ?? '');
@@ -80,48 +69,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $validAc
         $userId = (int)($_POST['user_id'] ?? 0);
         $newRole = strtolower(trim($_POST['role'] ?? 'customer'));
         if ($userId > 0 && in_array($newRole, ['customer', 'staff', 'admin'], true)) {
-            $archiveCondition = $archiveAvailable ? ' AND NOT EXISTS (SELECT 1 FROM customer_archives WHERE user_id = users.id)' : '';
-            $stmt = $conn->prepare("UPDATE users SET role = ? WHERE id = ?" . $archiveCondition);
+            $stmt = $conn->prepare("UPDATE users SET role = ? WHERE id = ? AND role IN ('customer', 'staff', 'user')");
             if ($stmt) {
                 $stmt->bind_param("si", $newRole, $userId);
-                $stmt->execute();
+                $saved = $stmt->execute();
+                $changed = $stmt->affected_rows;
                 $stmt->close();
-                header("Location: users.php?role_updated=1");
-                exit;
+                if ($saved && $changed > 0) {
+                    header("Location: users.php?role_updated=1");
+                    exit;
+                }
+                $msg = 'No role change was made. Admin accounts are protected.';
+                $msgType = 'error';
             }
         }
     }
 
     if ($_POST['action'] === 'delete' && $conn && $isAdmin) {
         $userId = (int)($_POST['user_id'] ?? 0);
-        if ($userId > 0) {
-        $deleteRatingsStmt = $conn->prepare('DELETE FROM queue_ratings WHERE user_id = ?');
-        $deleteUserStmt = $conn->prepare('DELETE FROM users WHERE id = ?');
-        if ($deleteRatingsStmt && $deleteUserStmt) {
-          $conn->begin_transaction();
-          $deleteRatingsStmt->bind_param('i', $userId);
-          $deleteUserStmt->bind_param('i', $userId);
-          $ratingsDeleted = $deleteRatingsStmt->execute();
-          $userDeleted = $ratingsDeleted && $deleteUserStmt->execute();
-          if ($userDeleted) {
-            $conn->commit();
-            $deleteRatingsStmt->close();
-            $deleteUserStmt->close();
+        $result = deleteDirectoryUser($conn, $userId);
+        if ($result['ok']) {
             header('Location: users.php?deleted=1');
             exit;
-          }
-          $conn->rollback();
-          $deleteRatingsStmt->close();
-          $deleteUserStmt->close();
-          $msg = 'Could not delete the user and their ratings.';
-          $msgType = 'error';
-        } else {
-          $deleteRatingsStmt?->close();
-          $deleteUserStmt?->close();
-          $msg = 'Could not prepare user deletion.';
-          $msgType = 'error';
-            }
         }
+        $msg = $result['message'];
+        $msgType = 'error';
     }
 }
 
@@ -131,9 +103,7 @@ if ($conn) {
     $presenceAvailable = ensureUserPresenceColumns($conn);
     recordUserActivity($conn, (int)($_SESSION['user_id'] ?? 0));
     $presenceColumns = $presenceAvailable ? 'u.last_seen_at' : 'NULL AS last_seen_at';
-    $archiveColumn = $archiveAvailable ? 'ca.archived_at' : 'NULL AS archived_at';
-    $archiveJoin = $archiveAvailable ? ' LEFT JOIN customer_archives ca ON ca.user_id = u.id' : '';
-    $result = $conn->query("SELECT u.id, u.fullname, u.email, u.role, u.created_at, $presenceColumns, $archiveColumn FROM users u$archiveJoin ORDER BY u.id ASC");
+    $result = $conn->query("SELECT u.id, u.fullname, u.email, u.role, u.created_at, $presenceColumns FROM users u ORDER BY u.id ASC");
     if ($result) {
         while ($row = $result->fetch_assoc()) {
             $userList[] = [
@@ -142,7 +112,6 @@ if ($conn) {
                 'email' => $row['email'] ?? '',
                 'role' => strtolower($row['role'] ?? 'customer'),
                 'created_at' => $row['created_at'] ?? 'Just now',
-                'archived_at' => $row['archived_at'] ?? null,
                 'presence' => getUserPresence($row['last_seen_at'] ?? null),
                 'photo_url' => ($photoFilename = getUserProfilePhotoFilename((int)$row['id']))
                   ? '../uploads/profile/' . rawurlencode($photoFilename)
@@ -152,11 +121,10 @@ if ($conn) {
     }
 }
 
-$activeUsers = array_filter($userList, fn($u) => $u['archived_at'] === null);
+$activeUsers = $userList;
 $adminCount = count(array_filter($activeUsers, fn($u) => in_array($u['role'], ['admin', 'superadmin'], true)));
 $staffCount = count(array_filter($activeUsers, fn($u) => $u['role'] === 'staff'));
 $customerCount = count(array_filter($activeUsers, fn($u) => in_array($u['role'], ['customer', 'user'], true)));
-$archivedCount = count($userList) - count($activeUsers);
 $directoryCount = count($activeUsers);
 $totalCount = count($userList);
 
@@ -276,13 +244,28 @@ require_once '../includes/header.php';
   .hidden { display: none !important; }
   #usersTable .user-row:hover,
   #usersTable .user-row:focus-within { background: #faf5ff; }
-  #usersTable .user-row.is-selected { background: #f3e8ff; }
   body.dark-mode #usersTable .user-row:hover,
   body.dark-mode #usersTable .user-row:focus-within { background: #2a2240 !important; }
-  body.dark-mode #usersTable .user-row.is-selected { background: #30254a !important; }
-  .users-selection-cell { width: 48px; padding: 16px; text-align: center; }
   .users-view-label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; font-weight: 700; }
-  .users-archive-notice { margin-bottom: 20px; color: #b45309; font-size: 13px; }
+  .users-table-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 22px; border-bottom: 1px solid #334155; }
+  .users-table-heading h2 { margin: 0; color: #f8fafc; font-size: 16px; font-weight: 800; }
+  .users-table-heading p { margin: 5px 0 0; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+  .users-protected { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; color: #94a3b8; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .users-protected svg, .users-protected i { width: 14px; height: 14px; }
+  #usersTable { min-width: 900px; }
+  #usersTable thead th { padding: 13px 18px; letter-spacing: 0.03em; }
+  #usersTable tbody td { padding: 18px; vertical-align: middle; }
+  #usersTable th:first-child { width: 25%; }
+  #usersTable td[data-user-field="email"] { font-family: inherit; font-size: 12px; }
+  #usersTable td[data-user-field="created"] { white-space: nowrap; color: #cbd5e1; }
+  #usersTable .role-badge { min-height: 34px; border-radius: 8px; text-transform: none; letter-spacing: 0; }
+  #usersTable .directory-select { min-height: 36px; min-width: 112px; font-size: 12px; }
+  #usersTable .user-delete-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 8px 12px; border: 1px solid #8c4444; border-radius: 8px; background: rgba(127, 29, 29, 0.15); color: #fca5a5; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease; }
+  #usersTable .user-delete-button:hover { background: #7f1d1d; border-color: #f87171; color: #fff; }
+  #usersTable .user-delete-button:focus-visible { outline: 2px solid #fca5a5; outline-offset: 3px; }
+  #usersTable .user-delete-button svg { width: 14px; height: 14px; }
+  .users-row-meta { display: block; margin-top: 4px; color: #94a3b8; font-size: 11px; }
+  @media (max-width: 640px) { .users-table-heading { padding: 16px; } }
   @media (prefers-reduced-motion: reduce) {
     .stat-card-luxury,
     #usersTable .user-row { transition: none; }
@@ -356,9 +339,6 @@ require_once '../includes/header.php';
 </div>
 <?php endif; ?>
 
-<?php if (!$archiveAvailable): ?>
-<p class="users-archive-notice" role="status">Customer archiving is temporarily unavailable. Please try again later.</p>
-<?php endif; ?>
 
 <!-- Executive Metric Cards -->
 <div class="users-metrics grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 mb-8">
@@ -429,7 +409,6 @@ require_once '../includes/header.php';
       <option value="customer" <?= $initialFilter === 'customer' ? 'selected' : '' ?>>Customers (<?= $customerCount ?>)</option>
       <option value="staff" <?= $initialFilter === 'staff' ? 'selected' : '' ?>>Staff Officers (<?= $staffCount ?>)</option>
       <option value="admin" <?= $initialFilter === 'admin' ? 'selected' : '' ?>>Admins (<?= $adminCount ?>)</option>
-      <option value="archived" <?= $initialFilter === 'archived' ? 'selected' : '' ?>>Archived Customers (<?= $archivedCount ?>)</option>
     </select>
   </label>
 
@@ -440,46 +419,30 @@ require_once '../includes/header.php';
   </div>
 </div>
 
-<form method="post" id="customerArchiveForm" class="directory-selection-bar">
-  <input type="hidden" name="action" id="customerArchiveAction" value="archive_customers">
-  <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($archiveCsrfToken, ENT_QUOTES) ?>">
-  <span id="customerSelectionCount" role="status">0 customers selected on this page</span>
-  <div class="directory-selection-actions">
-  <button type="button" id="clearCustomerSelection" class="directory-button" disabled>Clear selection</button>
-  <button type="submit" id="archiveSelectedCustomers" class="directory-button" disabled>
-    <i data-feather="archive" class="w-4 h-4" aria-hidden="true"></i>
-    <span id="customerArchiveLabel">Archive Selected</span>
-  </button>
-  </div>
-</form>
 
 <!-- Users Table Card -->
 <div class="users-table-card bg-white border border-[#ece9f4] rounded-2xl shadow-sm overflow-hidden">
+  <div class="users-table-heading"><div><h2>User accounts</h2><p>Manage staff and customers. Admin accounts are protected.</p></div></div>
   <div class="overflow-x-auto">
     <table class="w-full text-left border-collapse text-xs" id="usersTable">
       <thead>
         <tr class="bg-slate-50/80 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider text-[11px]">
-          <th class="users-selection-cell"><input type="checkbox" id="selectPageCustomers" class="directory-checkbox" aria-label="Select customers on this page" <?= !$archiveAvailable ? 'disabled' : '' ?>></th>
-          <th class="py-4 px-6">ID & USER NAME</th>
-          <th class="py-4 px-4">ROLE PERMISSION</th>
-          <th class="py-4 px-4">EMAIL ADDRESS</th>
-          <th class="py-4 px-4">ACCOUNT CREATED</th>
-          <th class="py-4 px-4">STATUS</th>
-          <th class="py-4 px-6 text-right">ACTIONS</th>
+          <th scope="col">User</th>
+          <th scope="col">Role</th>
+          <th scope="col">Email</th>
+          <th scope="col">Joined</th>
+          <th scope="col">Status</th>
+          <th scope="col" class="text-right">Actions</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100 font-medium text-slate-700" id="usersTableBody">
         <?php foreach ($userList as $u): 
           $roleClass = in_array($u['role'], ['admin', 'superadmin'], true) ? 'admin' : ($u['role'] === 'staff' ? 'staff' : 'customer');
           $isCustomer = in_array($u['role'], ['customer', 'user'], true);
-          $isArchived = $u['archived_at'] !== null;
+          $isProtected = in_array($u['role'], ['admin', 'superadmin'], true);
+          $canDelete = in_array($u['role'], ['staff', 'customer'], true);
         ?>
-        <tr class="user-row transition" data-user-id="<?= $u['id'] ?>" data-name="<?= htmlspecialchars($u['name'], ENT_QUOTES) ?>" data-email="<?= htmlspecialchars($u['email'], ENT_QUOTES) ?>" data-role="<?= $roleClass ?>" data-archived="<?= $isArchived ? 'true' : 'false' ?>">
-          <td class="users-selection-cell">
-            <?php if ($isCustomer): ?>
-            <input type="checkbox" name="user_ids[]" value="<?= $u['id'] ?>" form="customerArchiveForm" class="directory-checkbox customer-selection" aria-label="Select <?= htmlspecialchars($u['name'], ENT_QUOTES) ?>" <?= !$archiveAvailable ? 'disabled' : '' ?>>
-            <?php else: ?><span aria-hidden="true">&mdash;</span><?php endif; ?>
-          </td>
+        <tr class="user-row transition" data-user-id="<?= $u['id'] ?>" data-name="<?= htmlspecialchars($u['name'], ENT_QUOTES) ?>" data-email="<?= htmlspecialchars($u['email'], ENT_QUOTES) ?>" data-role="<?= $roleClass ?>">
           <td class="py-4 px-6" data-user-field="name">
             <div class="flex items-center gap-3">
               <?php if (!empty($u['photo_url'])): ?>
@@ -491,14 +454,16 @@ require_once '../includes/header.php';
                 <div class="flex items-center gap-2">
                   <strong class="text-slate-900 font-bold text-sm"><?= htmlspecialchars($u['name']) ?></strong>
                 </div>
-                <span class="text-[11px] text-slate-400 block mt-0.5"><?= ucfirst($roleClass) ?> Account</span>
+                <span class="users-row-meta">User #<?= (int)$u['id'] ?><?= (int)$u['id'] === (int)$_SESSION['user_id'] ? ' · You' : '' ?></span>
               </div>
             </div>
           </td>
           <td class="py-4 px-4" data-user-field="role">
-            <?php if ($isAdmin && !$isArchived): ?>
+            <?php if ($isProtected): ?>
+            <span class="role-badge admin"><i data-feather="shield" style="width: 13px; height: 13px;" aria-hidden="true"></i> Admin</span>
+            <?php elseif ($isAdmin): ?>
             <form method="post" class="inline-flex items-center gap-1.5">
-              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($archiveCsrfToken, ENT_QUOTES) ?>">
+              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($usersCsrfToken, ENT_QUOTES) ?>">
               <input type="hidden" name="action" value="update_role">
               <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
               <select name="role" onchange="this.form.submit()" aria-label="Role for <?= htmlspecialchars($u['name'], ENT_QUOTES) ?>" class="directory-select">
@@ -515,43 +480,28 @@ require_once '../includes/header.php';
             <?= htmlspecialchars($u['email']) ?>
           </td>
           <td class="py-4 px-4 text-slate-500" data-user-field="created">
-            <?= htmlspecialchars($u['created_at'] !== 'Just now' ? date('M d, Y h:i A', strtotime($u['created_at'])) : 'Just now') ?>
+            <?= htmlspecialchars($u['created_at'] !== 'Just now' ? date('M d, Y', strtotime($u['created_at'])) : 'Just now') ?>
           </td>
           <td class="py-4 px-4" data-user-field="status">
-            <?php if ($isArchived): ?>
-            <span class="user-presence-badge is-offline"><span data-presence-status>Archived</span></span>
-            <span class="user-last-seen" data-last-seen><?= htmlspecialchars(date('M d, Y h:i A', strtotime($u['archived_at']))) ?></span>
-            <?php else: ?>
             <span class="user-presence-badge <?= $u['presence']['is_active'] ? 'is-active' : 'is-offline' ?>">
               <span class="user-presence-dot" aria-hidden="true"></span>
               <span data-presence-status><?= htmlspecialchars($u['presence']['status']) ?></span>
             </span>
             <span class="user-last-seen <?= $u['presence']['is_active'] ? 'hidden' : '' ?>" data-last-seen><?= htmlspecialchars($u['presence']['last_seen_label']) ?></span>
-            <?php endif; ?>
           </td>
           <td class="py-4 px-6 text-right">
-            <?php if ($isCustomer): ?>
-            <form method="post" class="inline customer-archive-row-form">
-              <input type="hidden" name="action" value="<?= $isArchived ? 'restore_customers' : 'archive_customers' ?>">
-              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($archiveCsrfToken, ENT_QUOTES) ?>">
-              <input type="hidden" name="user_ids[]" value="<?= $u['id'] ?>">
-              <button type="submit" class="directory-button" <?= !$archiveAvailable ? 'disabled' : '' ?> aria-label="<?= $isArchived ? 'Restore' : 'Archive' ?> <?= htmlspecialchars($u['name'], ENT_QUOTES) ?>">
-                <i data-feather="<?= $isArchived ? 'rotate-ccw' : 'archive' ?>" class="w-3.5 h-3.5" aria-hidden="true"></i>
-                <span><?= $isArchived ? 'Restore' : 'Archive' ?></span>
-              </button>
-            </form>
-            <?php elseif ($isAdmin): ?>
+            <?php if ($isAdmin && $canDelete): ?>
             <form method="post" class="inline delete-user-form" data-user-name="<?= htmlspecialchars($u['name'], ENT_QUOTES) ?>">
-              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($archiveCsrfToken, ENT_QUOTES) ?>">
+              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($usersCsrfToken, ENT_QUOTES) ?>">
               <input type="hidden" name="action" value="delete">
               <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
-              <button type="submit" class="directory-button directory-button--danger" title="Delete User">
+              <button type="submit" class="user-delete-button" aria-label="Delete <?= htmlspecialchars($u['name'], ENT_QUOTES) ?>">
                 <i data-feather="trash-2" class="w-3.5 h-3.5"></i>
-                <span>DELETE</span>
+                <span>Delete</span>
               </button>
             </form>
             <?php else: ?>
-            <span class="text-[11px] font-semibold text-slate-400">Admin only</span>
+            <span class="users-protected"><i data-feather="shield" aria-hidden="true"></i> Protected</span>
             <?php endif; ?>
           </td>
         </tr>
@@ -585,7 +535,7 @@ require_once '../includes/header.php';
     </div>
 
     <form method="post" class="space-y-4 mt-4">
-      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($archiveCsrfToken, ENT_QUOTES) ?>">
+      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($usersCsrfToken, ENT_QUOTES) ?>">
       <input type="hidden" name="action" value="create">
 
       <div>
@@ -629,62 +579,16 @@ require_once '../includes/header.php';
   const userRows = Array.from(document.querySelectorAll('#usersTableBody .user-row'));
   const userSearch = document.getElementById('userSearch');
   const emptyState = document.getElementById('emptyState');
-  const selectPageCustomers = document.getElementById('selectPageCustomers');
-  const customerCheckboxes = Array.from(document.querySelectorAll('.customer-selection'));
-  const archiveSelectedButton = document.getElementById('archiveSelectedCustomers');
-  const clearSelectionButton = document.getElementById('clearCustomerSelection');
   let filteredUserRows = [];
-
-  function visibleCustomerCheckboxes() {
-    return customerCheckboxes.filter(checkbox => {
-      const row = checkbox.closest('.user-row');
-      return !checkbox.disabled && !row.classList.contains('hidden') && !row.classList.contains('directory-page-hidden');
-    });
-  }
-
-  function updateCustomerSelection() {
-    const visible = visibleCustomerCheckboxes();
-    const selected = visible.filter(checkbox => checkbox.checked);
-    customerCheckboxes.forEach(checkbox => checkbox.closest('.user-row').classList.toggle('is-selected', checkbox.checked));
-    document.getElementById('customerSelectionCount').textContent = `${selected.length} ${selected.length === 1 ? 'customer' : 'customers'} selected on this page`;
-    selectPageCustomers.disabled = visible.length === 0;
-    selectPageCustomers.checked = visible.length > 0 && selected.length === visible.length;
-    selectPageCustomers.indeterminate = selected.length > 0 && selected.length < visible.length;
-    archiveSelectedButton.disabled = selected.length === 0;
-    clearSelectionButton.disabled = selected.length === 0;
-    const restoring = userViewFilter.value === 'archived';
-    document.getElementById('customerArchiveAction').value = restoring ? 'restore_customers' : 'archive_customers';
-    document.getElementById('customerArchiveLabel').textContent = restoring ? 'Restore Selected' : 'Archive Selected';
-  }
-
-  function clearCustomerSelection() {
-    customerCheckboxes.forEach(checkbox => { checkbox.checked = false; });
-    updateCustomerSelection();
-  }
 
   const userPagination = new DirectoryPagination({
     items: userRows,
     controls: document.getElementById('usersPagination'),
     pageSize: 10,
     pageSizes: [10, 25, 50],
-    label: 'users',
-    onChange: clearCustomerSelection
+    label: 'users'
   });
 
-  customerCheckboxes.forEach(checkbox => checkbox.addEventListener('change', updateCustomerSelection));
-  selectPageCustomers.addEventListener('change', () => {
-    visibleCustomerCheckboxes().forEach(checkbox => { checkbox.checked = selectPageCustomers.checked; });
-    updateCustomerSelection();
-  });
-  clearSelectionButton.addEventListener('click', clearCustomerSelection);
-  document.getElementById('customerArchiveForm').addEventListener('submit', event => {
-    const visible = new Set(visibleCustomerCheckboxes());
-    customerCheckboxes.forEach(checkbox => {
-      if (!visible.has(checkbox)) checkbox.checked = false;
-    });
-    if (!Array.from(visible).some(checkbox => checkbox.checked)) event.preventDefault();
-    updateCustomerSelection();
-  });
   document.querySelectorAll('.delete-user-form').forEach(form => {
     form.addEventListener('submit', event => {
       if (!window.confirm(`Permanently delete user ${form.dataset.userName || 'this user'}?`)) event.preventDefault();
@@ -704,7 +608,6 @@ require_once '../includes/header.php';
       if (!data.ok || !Array.isArray(data.users)) return;
       const statuses = new Map(data.users.map(user => [String(user.id), user]));
       userRows.forEach(row => {
-        if (row.dataset.archived === 'true') return;
         const presence = statuses.get(row.dataset.userId);
         if (!presence) return;
         const badge = row.querySelector('.user-presence-badge');
@@ -737,8 +640,7 @@ require_once '../includes/header.php';
     const term = userSearch.value.trim().toLowerCase();
     filteredUserRows = userRows.filter(row => {
       const role = row.dataset.role;
-      const archived = row.dataset.archived === 'true';
-      const matchesView = view === 'archived' ? archived : !archived && (view === 'all' || role === view);
+      const matchesView = view === 'all' || role === view;
       const matchesSearch = !term || `${row.dataset.name} ${row.dataset.email} ${role}`.toLowerCase().includes(term);
       const matches = matchesView && matchesSearch;
       row.classList.toggle('hidden', !matches);
@@ -869,13 +771,6 @@ require_once '../includes/header.php';
     if (urlParams.has('deleted')) {
       showToast('User deleted.');
     }
-    ['archived', 'restored'].forEach(action => {
-      if (!urlParams.has(action)) return;
-      const count = Number(urlParams.get(action));
-      if (Number.isInteger(count) && count >= 0 && count <= 500) {
-        showToast(`${count} ${count === 1 ? 'customer' : 'customers'} ${action}.`);
-      }
-    });
   });
 </script>
 

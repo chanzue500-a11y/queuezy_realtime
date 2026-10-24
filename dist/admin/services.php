@@ -9,6 +9,7 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
   exit;
 }
 require_once __DIR__ . '/../includes/service_times.php';
+require_once __DIR__ . '/../includes/service_catalog.php';
 
 $serviceTimeCsrf = $_SESSION['service_time_csrf'] ??= bin2hex(random_bytes(32));
 $msg = $_SESSION['service_time_success'] ?? '';
@@ -118,49 +119,7 @@ if ($isActionPost && $validActionToken) {
 }
 
   if ($conn) {
-    $catalog = [
-      ['Hair Care & Hair Styling Department', 'HCHS', [
-        'Women\'s Precision Cut & Style', 'Men\'s Classic Haircut', 'Children\'s Haircut (12 & under)', 'Bangs / Fringe Trim', 'Split-End Removal Treatment',
-        'Signature Blowout', 'Wash, Blow-dry & Curling / Flat Iron', 'Formal Updo / Evening Styling', 'Bridal Hair Styling (Trial & Event Day)', 'Braids, Cornrows & Twists', 'Shampoo & Set',
-        'Single-Process All-Over Color', 'Root Touch-Up & Gray Coverage', 'Traditional Highlights (Full Head / Half Head)', 'Balayage / Ombre / Color Melting', 'Baby Lights / Money Piece Highlights', 'Gloss / Toner / Shine Treatment', 'Color Correction', 'Creative / Pastel Fashion Colors',
-        'Brazilian Blowout / Keratin Treatment', 'Thermal Rebonding / Hair Straightening', 'Nanoplasty Smoothing', 'Digital Perm / Cold Wave Perm', 'Chemical Hair Relaxer',
-        'Olaplex Bond Building Treatment', 'Deep Conditioning Moisture Mask', 'Scalp Detox & Exfoliating Scrub', 'Hair Botox Therapy', 'Anti-Dandruff Intensive Scalp Care', 'Hair Loss & Thinning Therapy',
-        'Tape-In Extensions Installation', 'K-Tip / I-Tip Extensions', 'Sew-In / Weave Extensions', 'Extension Removal, Re-fitting & Maintenance',
-      ]],
-      ["Barbering & Men's Grooming Department", 'BMG', [
-        'Precision Fade (Skin Fade, Drop Fade, Taper Fade)', 'Men\'s Classic Scissors Cut', 'Buzz Cut & Line-Up', 'Hair Tattooing & Razor Designs', 'Hot Towel Straight Razor Shave', 'Beard Sculpting & Line-Up', 'Beard Trimming & Conditioning', 'Mustache Grooming & Waxing', 'Beard Color & Gray Blending', 'Scalp & Shoulder Massage', 'Men\'s Deep Cleanse Express Facial', 'Nose & Ear Waxing', 'Eyebrow Cleanup & Shaping',
-      ]],
-      ['Nail Care & Enhancements Department', 'NCE', [
-        'Classic Manicure / Pedicure', 'Gel Manicure / Pedicure', 'Russian Dry Manicure', 'Express Nail Cleanup', 'Sports / Men\'s Nail Care', 'Paraffin Wax Treatment (Hands / Feet)', 'Hydrating Hand & Foot Spa', 'Intensive Callus Removal', 'Full Set Acrylic Extensions', 'Builder Gel / BIAB (Builder in a Bottle)', 'Polygel Extensions', 'Dip Powder (SNS) Nails', 'Hard Gel Overlay', 'Nail Extension Removal & Refill', 'Hand-Painted Nail Art', 'Chrome / Holographic Finish', 'French Tip Design', 'Rhinestone & 3D Embellishments', 'Cat-Eye Gel Polish', 'Single Nail Repair',
-      ]],
-      ['Skin Care & Esthetics Department', 'SCE', [
-        'Deep Cleansing Facial', 'Hydrating / Moisture Surge Facial', 'Gentle Sensitive Skin Facial', 'European Relaxing Facial', 'HydraFacial', 'Microdermabrasion / Diamond Peel', 'Chemical Peels (Glycolic, Salicylic, TCA)', 'LED Light Therapy (Red/Blue Light)', 'Oxygen Infusion Facial', 'Back Facial (Back Acne Treatment)', 'Milia / Extraction Treatment', 'Chest & Neck Decongestant Treatment', 'Hyperpigmentation / Dark Spot Corrector',
-      ]],
-      ['Medical Aesthetics Department (MedSpa)', 'MED', [
-        'Botox / Neurotoxin Injections', 'Dermal Fillers (Lips, Cheeks, Jawline, Under-Eye)', 'Lip Flip', 'Profhilo Skin Remodeling', 'Kybella Fat Dissolving (Double Chin)', 'CO2 Fractional Laser Resurfacing', 'Carbon Laser Peel (Hollywood Peel)', 'Laser Tattoo Removal', 'Spider Vein & Pigmentation Removal', 'Microneedling with Hyaluronic Acid', 'PRP Vampire Facial (Platelet-Rich Plasma)', 'Exosome Therapy', 'PDO Thread Lift', 'CoolSculpting (Cryolipolysis)', 'Emsculpt Muscle Toning', 'Ultrasonic Cavitation & RF Slimming', 'Endermologie Cellulite Reduction',
-      ]],
-      ['Lash, Brow & Semi-Permanent Makeup (PMU) Department', 'PMU', [
-        'Classic Lash Extensions', 'Hybrid Lash Extensions', 'Volume & Mega Volume Lash Extensions', 'Lash Lift & Tint', 'Lash Extension Removal', 'Lash Nourishing Botox Treatment', 'Eyebrow Threading', 'Eyebrow Waxing & Tweezing', 'Brow Lamination', 'Brow Tinting', 'Henna Brows', 'Microblading / Hair-Stroke Brows', 'Powder / Ombre Brows', 'Combination Brows', 'Lip Blush Tattoo', 'Tightline Eyeliner Tattoo', 'PMU Color Correction or Removal',
-      ]],
-      ['Body & Massage Therapy Department', 'BMT', [
-        'Swedish Massage', 'Deep Tissue Massage', 'Hot Stone Massage', 'Aromatherapy Massage', 'Prenatal / Pregnancy Massage', 'Foot Reflexology', 'Shiatsu Massage', 'Exfoliating Body Scrub / Polish', 'Detoxifying Body Wrap', 'Lymphatic Drainage Massage', 'Back Scrub & Massage Combo', 'Custom Airbrush Spray Tan', 'Express Rapid Spray Tan', 'Sunbed UV Tanning',
-      ]],
-      ['Hair Removal Department', 'HR', [
-        'Full Body Waxing', 'Brazilian & Bikini Waxing', 'Underarm Waxing', 'Leg & Arm Waxing', 'Facial Waxing (Lip, Chin, Cheeks)', 'Full Face Threading', 'Organic Body Sugaring', 'Diode Laser Hair Removal', 'IPL (Intense Pulsed Light) Hair Removal',
-      ]],
-      ['Wellness & Holistic Health Department', 'WHH', [
-        'Infrared Sauna Session', 'Cold Plunge Therapy', 'Salt Room / Halotherapy', 'Acupuncture', 'Cupping Therapy (Venting)', 'Reiki Energy Healing', 'Hydration IV Drip', 'Immunity / Vitamin C Drip', 'Glutathione Glow Drip', 'Vitamin B12 Shot', 'NAD+ Anti-Aging Injections',
-      ]],
-      ['Piercing & Body Modification Department', 'PBM', [
-        'Ear Lobe Piercing', 'Cartilage / Helix / Tragus Piercing', 'Nose (Nostril / Septum) Piercing', 'Lip & Tongue Piercing', 'Navel Piercing', 'Nipple & Surface Piercings', 'Implant-Grade Titanium/Gold Jewelry Fitting', 'Post-Piercing Downsizing & Check-Up', 'Piercing Hole Tapering & Re-Opening',
-      ]],
-      ['Makeup & Glamour Department', 'MGP', [
-        'Day / Natural Glam Makeup', 'Full Evening Glam Makeup', 'Airbrush Makeup', 'Special Effects (SFX) / Creative Makeup', 'Bridal Makeup (Trial & Wedding Day)', 'Bridesmaids & Entourage Makeup', 'On-Site Group Event Glam',
-      ]],
-      ['Retail & Boutique Department', 'RBT', [
-        'Professional Shampoo & Conditioner Sets', 'Hair Masks, Oils & Leave-in Conditioners', 'Serums, Sunscreen & Skincare Products', 'Cuticle Oils & Hand Creams', 'Hot Hair Tools (Straighteners, Curling Wands)', 'Silk Pillowcases & Scrunchies', 'Scalp Massagers & Hair Brushes', 'Eyelash & Eyebrow Aftercare Kits',
-      ]],
-    ];
+    $catalog = defaultServiceCatalog();
 
     $departmentStmt = $conn->prepare('INSERT INTO departments (dept_name, dept_code, status) SELECT ?, ?, \'active\' WHERE NOT EXISTS (SELECT 1 FROM departments WHERE dept_name = ?)');
     $serviceStmt = $conn->prepare('INSERT INTO services (dept_id, service_name, estimated_time_mins) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM services WHERE dept_id = ? AND service_name = ?)');

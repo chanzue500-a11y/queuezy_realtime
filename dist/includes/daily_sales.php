@@ -5,7 +5,8 @@ function dailySalesFilters(array $input, ?DateTimeImmutable $now = null): array
 {
     $today = ($now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))
         ->setTimezone(new DateTimeZone('Asia/Manila'))->setTime(0, 0);
-    $filters = ['date_from' => $today->modify('-6 days')->format('Y-m-d'), 'date_to' => $today->format('Y-m-d'), 'page' => 1, 'errors' => []];
+    $todayDate = $today->format('Y-m-d');
+    $filters = ['date_from' => $todayDate, 'date_to' => $todayDate, 'page' => 1, 'errors' => []];
     foreach (['sales_from' => 'date_from', 'sales_to' => 'date_to'] as $parameter => $field) {
         if (!isset($input[$parameter]) || $input[$parameter] === '') continue;
         $text = is_string($input[$parameter]) ? $input[$parameter] : '';
@@ -32,16 +33,22 @@ function dailySalesData(mysqli $connection, array $filters): array
 {
     if ($filters['errors']) throw new InvalidArgumentException(implode(' ', $filters['errors']));
     $results = queueReportQuery($connection, "SELECT DATE(q.completed_at) AS sales_date,
-        COUNT(*) AS completed_tickets, CAST(SUM(qp.amount) * 100 AS SIGNED) AS sales_cents
+        SUM(TIME(q.completed_at) BETWEEN '07:30:00' AND '17:00:00') AS completed_tickets,
+        CAST(SUM(CASE WHEN TIME(q.completed_at) BETWEEN '07:30:00' AND '17:00:00' THEN qp.amount ELSE 0 END) * 100 AS SIGNED) AS sales_cents,
+        SUM(TIME(q.completed_at) NOT BETWEEN '07:30:00' AND '17:00:00') AS outside_tickets,
+        CAST(SUM(CASE WHEN TIME(q.completed_at) NOT BETWEEN '07:30:00' AND '17:00:00' THEN qp.amount ELSE 0 END) * 100 AS SIGNED) AS outside_sales_cents,
+        MAX(CASE WHEN TIME(q.completed_at) NOT BETWEEN '07:30:00' AND '17:00:00' THEN q.completed_at END) AS latest_outside_at
         FROM queue q INNER JOIN queue_payments qp ON qp.queue_id = q.id AND qp.status = 'paid'
         WHERE q.status = 'completed' AND q.completed_at >= ? AND q.completed_at <= ?
-        AND TIME(q.completed_at) BETWEEN '08:30:00' AND '17:00:00'
         GROUP BY DATE(q.completed_at) ORDER BY sales_date DESC", 'ss',
-        [$filters['date_from'] . ' 08:30:00', $filters['date_to'] . ' 17:00:00']);
+        [$filters['date_from'] . ' 00:00:00', $filters['date_to'] . ' 23:59:59']);
     $byDate = array_column($results, null, 'sales_date');
     $rows = [];
     $totalTickets = 0;
     $totalSales = 0;
+    $outsideTickets = 0;
+    $outsideSales = 0;
+    $latestOutsideAt = null;
     $start = new DateTimeImmutable($filters['date_from'], new DateTimeZone('Asia/Manila'));
     $end = new DateTimeImmutable($filters['date_to'], new DateTimeZone('Asia/Manila'));
     for ($day = $end; $day >= $start; $day = $day->modify('-1 day')) {
@@ -51,9 +58,14 @@ function dailySalesData(mysqli $connection, array $filters): array
         $rows[] = ['date' => $date, 'completed_tickets' => $tickets, 'sales_cents' => $sales];
         $totalTickets += $tickets;
         $totalSales += $sales;
+        $outsideTickets += (int)($byDate[$date]['outside_tickets'] ?? 0);
+        $outsideSales += (int)($byDate[$date]['outside_sales_cents'] ?? 0);
+        $outsideAt = $byDate[$date]['latest_outside_at'] ?? null;
+        if ($outsideAt !== null && ($latestOutsideAt === null || $outsideAt > $latestOutsideAt)) $latestOutsideAt = $outsideAt;
     }
     $pages = max(1, (int)ceil(count($rows) / 10));
     $page = min($filters['page'], $pages);
     return ['rows' => array_slice($rows, ($page - 1) * 10, 10), 'days' => count($rows), 'page' => $page,
-        'pages' => $pages, 'total_tickets' => $totalTickets, 'total_sales_cents' => $totalSales];
+        'pages' => $pages, 'total_tickets' => $totalTickets, 'total_sales_cents' => $totalSales,
+        'outside_tickets' => $outsideTickets, 'outside_sales_cents' => $outsideSales, 'latest_outside_at' => $latestOutsideAt];
 }

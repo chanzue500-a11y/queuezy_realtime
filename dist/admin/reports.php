@@ -7,10 +7,40 @@ if (($_SESSION['user_role'] ?? '') !== 'admin') {
 require_once __DIR__ . '/../database/db.php';
 require_once __DIR__ . '/../includes/queue_report.php';
 require_once __DIR__ . '/../includes/daily_sales.php';
+require_once __DIR__ . '/../includes/queue_transactions.php';
 $conn = $conn ?? null;
 
 $filters = queueReportFilters($_GET);
 $dailyFilters = dailySalesFilters($_GET);
+$transactionCsrf = $_SESSION['queue_transaction_csrf'] ??= bin2hex(random_bytes(32));
+$transactionNotice = $_SESSION['queue_transaction_notice'] ?? '';
+unset($_SESSION['queue_transaction_notice']);
+$transactionError = '';
+$transactionReturnQuery = array_merge(array_diff_key($filters, ['errors' => true]), [
+    'sales_from' => $dailyFilters['date_from'], 'sales_to' => $dailyFilters['date_to'], 'sales_page' => $dailyFilters['page'],
+]);
+foreach (['sales_open', 'sales_breakdown'] as $flag) {
+    if (($_GET[$flag] ?? '') === '1') $transactionReturnQuery[$flag] = '1';
+}
+$transactionReturnUrl = 'reports.php?' . http_build_query($transactionReturnQuery) . '#queue-transactions';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_transaction') {
+    $token = $_POST['csrf_token'] ?? '';
+    if (!is_string($token) || !hash_equals($transactionCsrf, $token)) {
+        http_response_code(403);
+        $transactionError = 'Your session could not be verified. Refresh the report and try again.';
+    } elseif (!$conn) {
+        $transactionError = 'The database is unavailable. Please try again.';
+    } else {
+        $queueId = filter_var($_POST['queue_id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $result = deleteQueueTransaction($conn, $queueId === false ? 0 : $queueId);
+        if ($result['ok']) {
+            $_SESSION['queue_transaction_notice'] = $result['message'];
+            header('Location: ' . $transactionReturnUrl);
+            exit;
+        }
+        $transactionError = $result['message'];
+    }
+}
 $dailySales = null;
 $dailySalesError = $dailyFilters['errors'] ? implode(' ', $dailyFilters['errors']) : '';
 if ($conn && $dailySalesError === '') {
@@ -49,10 +79,23 @@ $salesPageUrl = static function (int $page) use ($dailyFilters, $filters): strin
     $query['sales_to'] = $dailyFilters['date_to'];
     $query['sales_page'] = $page;
     $query['sales_open'] = '1';
+    $query['sales_breakdown'] = '1';
     return 'reports.php?' . http_build_query($query) . '#daily-sales';
 };
 $salesToday = new DateTimeImmutable('today', new DateTimeZone('Asia/Manila'));
 $salesYesterday = $salesToday->modify('-1 day')->format('Y-m-d');
+$salesWeekStart = $salesToday->modify('-6 days')->format('Y-m-d');
+$salesPresetUrl = static function (string $from, string $to) use ($filters): string {
+    return 'reports.php?' . http_build_query(array_merge(array_diff_key($filters, ['errors' => true]),
+        ['sales_from' => $from, 'sales_to' => $to, 'sales_open' => '1'])) . '#daily-sales';
+};
+$salesSingleDay = $dailyFilters['date_from'] === $dailyFilters['date_to'];
+$salesPreset = $salesSingleDay && $dailyFilters['date_from'] === $salesYesterday ? 'yesterday'
+    : ($salesSingleDay && $dailyFilters['date_from'] === $salesToday->format('Y-m-d') ? 'today'
+    : ($dailyFilters['date_from'] === $salesWeekStart && $dailyFilters['date_to'] === $salesToday->format('Y-m-d') ? 'week' : 'custom'));
+$salesPeriodTitle = match ($salesPreset) { 'yesterday' => 'Yesterday', 'today' => 'Today', 'week' => 'Last 7 days', default => $salesSingleDay ? 'Selected day' : 'Selected dates' };
+$salesPeriodLabel = (new DateTimeImmutable($dailyFilters['date_from']))->format('M j, Y')
+    . ($salesSingleDay ? '' : ' – ' . (new DateTimeImmutable($dailyFilters['date_to']))->format('M j, Y'));
 $dateLabel = static function ($value): string {
     if (!$value) return '—';
     $timestamp = strtotime($value);
@@ -583,32 +626,59 @@ require_once '../includes/header.php';
         <summary class="chart-head daily-sales-toggle">
             <div>
                 <h2 id="daily-sales-title" class="chart-title">Daily sales</h2>
-                <p class="chart-subtitle">8:30 AM–5:00 PM · Philippine time</p>
+                <p class="chart-subtitle">Sales and completed tickets for each business day</p>
             </div>
             <span class="daily-sales-toggle-label" aria-hidden="true"></span>
             <span class="daily-sales-chevron" aria-hidden="true">›</span>
         </summary>
+        <div class="daily-sales-content">
+        <div class="daily-sales-toolbar">
+        <nav class="daily-sales-presets" aria-label="Choose sales period">
+            <a href="<?= $escape($salesPresetUrl($salesYesterday, $salesYesterday)) ?>" <?= $salesPreset === 'yesterday' ? 'aria-current="page"' : '' ?>>Yesterday</a>
+            <a href="<?= $escape($salesPresetUrl($salesToday->format('Y-m-d'), $salesToday->format('Y-m-d'))) ?>" <?= $salesPreset === 'today' ? 'aria-current="page"' : '' ?>>Today</a>
+            <a href="<?= $escape($salesPresetUrl($salesWeekStart, $salesToday->format('Y-m-d'))) ?>" <?= $salesPreset === 'week' ? 'aria-current="page"' : '' ?>>Last 7 days</a>
+        </nav>
+        <details class="daily-sales-custom" <?= $dailySalesError !== '' ? 'open' : '' ?>>
+        <summary>Choose dates <span aria-hidden="true">▾</span></summary>
         <form class="daily-sales-controls" method="get" action="reports.php#daily-sales" aria-label="Daily sales date range">
             <input type="hidden" name="sales_open" value="1">
             <?php foreach (array_diff_key($filters, ['errors' => true]) as $key => $value): ?>
             <input type="hidden" name="<?= $escape($key) ?>" value="<?= $escape($value) ?>">
             <?php endforeach; ?>
-            <label>Sales from<input type="date" name="sales_from" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_from']) ?>"></label>
-            <label>Sales through<input type="date" name="sales_to" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_to']) ?>"></label>
-            <button type="submit" class="export-btn">View daily sales</button>
-            <a class="report-reset" href="reports.php?<?= $escape(http_build_query(array_merge(array_diff_key($filters, ['errors' => true]), ['sales_from' => $salesYesterday, 'sales_to' => $salesYesterday, 'sales_open' => '1']))) ?>#daily-sales">Yesterday</a>
+            <label>Start date<input type="date" name="sales_from" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_from']) ?>"></label>
+            <label>End date<input type="date" name="sales_to" required min="1000-01-01" max="<?= $salesToday->format('Y-m-d') ?>" value="<?= $escape($dailyFilters['date_to']) ?>"></label>
+            <button type="submit" class="export-btn">Show sales</button>
         </form>
+        </details>
+        </div>
         <?php if ($dailySalesError !== ''): ?>
         <p class="report-error" role="alert"><?= $escape($dailySalesError) ?></p>
         <?php elseif ($dailySales !== null): ?>
-        <div class="daily-sales-totals" aria-label="Sales totals for the selected date range">
-            <div><span>Completed tickets · selected dates</span><strong><?= number_format($dailySales['total_tickets']) ?></strong></div>
-            <div><span>Sales · selected dates</span><strong>&#8369;<?= number_format($dailySales['total_sales_cents'] / 100, 2) ?></strong></div>
+        <div class="daily-sales-period">
+            <div><h3><?= $escape($salesPeriodTitle) ?></h3><p><?= $escape($salesPeriodLabel) ?></p></div>
+            <span class="daily-sales-hours"><i class="fa-regular fa-clock" aria-hidden="true"></i> 7:30 AM–5:00 PM <small>Philippine time</small></span>
         </div>
-        <p class="daily-sales-note">Paid and completed tickets across all departments, grouped by completion date. Tickets outside the daily cutoff are excluded.</p>
+        <div class="daily-sales-totals" aria-label="Sales totals for the selected date range">
+            <div class="daily-sales-money"><span>Sales during business hours</span><strong>&#8369;<?= number_format($dailySales['total_sales_cents'] / 100, 2) ?></strong><small>Paid tickets completed from 7:30 AM to 5:00 PM</small></div>
+            <div><span>Completed during business hours</span><strong><?= number_format($dailySales['total_tickets']) ?></strong><small>Finished from 7:30 AM to 5:00 PM</small></div>
+        </div>
+        <?php if ($dailySales['outside_tickets'] > 0): ?>
+        <div class="daily-sales-outside" role="note">
+            <i class="fa-regular fa-clock" aria-hidden="true"></i>
+            <div><strong><?= number_format($dailySales['outside_tickets']) ?> paid <?= $dailySales['outside_tickets'] === 1 ? 'ticket was' : 'tickets were' ?> completed outside business hours</strong>
+            <p>&#8369;<?= number_format($dailySales['outside_sales_cents'] / 100, 2) ?> is excluded from the totals above. <?= $dailySales['outside_tickets'] === 1 ? 'Completed' : 'Most recent completion' ?>: <?= $escape((new DateTimeImmutable($dailySales['latest_outside_at'], new DateTimeZone('Asia/Manila')))->format('M j, Y · g:i A')) ?>, Philippine time.</p></div>
+        </div>
+        <?php elseif ($dailySales['total_tickets'] === 0): ?>
+        <p class="daily-sales-empty"><i class="fa-regular fa-calendar" aria-hidden="true"></i> No paid tickets were completed during these hours<?= $salesSingleDay ? ' on this date' : ' in this period' ?>. Try another date.</p>
+        <?php elseif ($salesPreset === 'today'): ?>
+        <p class="daily-sales-note">Today's sales are a running total until the 5:00 PM cutoff.</p>
+        <?php endif; ?>
+        <?php if (!$salesSingleDay): ?>
+        <details class="daily-sales-breakdown" <?= ($_GET['sales_breakdown'] ?? '') === '1' ? 'open' : '' ?>>
+        <summary>View daily breakdown <span><?= number_format($dailySales['days']) ?> days <span aria-hidden="true">▾</span></span></summary>
         <div class="daily-sales-table-wrap">
             <table class="daily-sales-table">
-                <thead><tr><th scope="col">Business date</th><th scope="col">Completed tickets</th><th scope="col">Sales</th></tr></thead>
+                <thead><tr><th scope="col">Date</th><th scope="col">Completed tickets</th><th scope="col">Sales</th></tr></thead>
                 <tbody>
                     <?php foreach ($dailySales['rows'] as $salesDay): ?>
                     <tr>
@@ -620,6 +690,7 @@ require_once '../includes/header.php';
                 </tbody>
             </table>
         </div>
+        <?php if ($dailySales['pages'] > 1): ?>
         <nav class="report-pagination" aria-label="Daily sales pagination">
             <span><?= number_format($dailySales['days']) ?> days · 10 per page · Page <?= $dailySales['page'] ?> of <?= $dailySales['pages'] ?></span>
             <div>
@@ -628,6 +699,10 @@ require_once '../includes/header.php';
             </div>
         </nav>
         <?php endif; ?>
+        </details>
+        <?php endif; ?>
+        <?php endif; ?>
+        </div>
     </details>
 
     <form class="report-filters" method="get" action="reports.php" aria-label="Filter queue transactions">
@@ -689,14 +764,15 @@ require_once '../includes/header.php';
     <div class="report-error" role="alert"><?= $escape($reportError !== '' ? $reportError : implode(' ', $filters['errors'])) ?></div>
     <?php endif; ?>
     <?php if ($reportError === '' && !$filters['errors']): ?>
-    <section class="chart-panel" aria-labelledby="department-report-title">
-        <div class="chart-head department-volume-head">
+    <details class="chart-panel department-volume-panel">
+        <summary class="chart-head department-volume-head daily-sales-toggle">
             <div>
                 <h2 id="department-report-title" class="chart-title">Completed tickets by department</h2>
-            
             </div>
             <span class="department-volume-summary"><?= number_format(count($report['departments'])) ?> departments · <?= number_format($totalDepartmentTickets) ?> completed <?= $totalDepartmentTickets === 1 ? 'ticket' : 'tickets' ?></span>
-        </div>
+            <span class="daily-sales-toggle-label" aria-hidden="true"></span>
+            <span class="daily-sales-chevron" aria-hidden="true">›</span>
+        </summary>
         <?php if ($report['department_counts']): ?>
         <div class="department-chart-scroll" tabindex="0" role="region" aria-label="Department bar graph; scroll horizontally to see all departments">
         <div class="department-chart" role="group" aria-labelledby="department-report-title" aria-describedby="department-volume-description" style="--departments: <?= count($report['department_counts']) ?>; --chart-min-width: <?= max(480, count($report['department_counts']) * 90 + 40) ?>px;">
@@ -719,15 +795,14 @@ require_once '../includes/header.php';
             <?php endforeach; ?>
                 </ul>
             </div>
-            <p class="department-chart-x-title" aria-hidden="true">Departments</p>
         </div>
         </div>
         <?php else: ?>
         <p class="department-empty">No department ticket data is available.</p>
         <?php endif; ?>
-    </section>
+    </details>
 
-    <section class="report-data-section" aria-labelledby="queue-transactions-title">
+    <section class="report-data-section" id="queue-transactions" aria-labelledby="queue-transactions-title">
         <div class="chart-head">
             <div>
                 <h2 id="queue-transactions-title" class="chart-title">Queue transactions</h2>
@@ -742,9 +817,11 @@ require_once '../includes/header.php';
                 <?php endif; ?>
             </div>
         </div>
+        <?php if ($transactionNotice !== ''): ?><p class="report-transaction-notice" role="status"><?= $escape($transactionNotice) ?></p><?php endif; ?>
+        <?php if ($transactionError !== ''): ?><p class="report-error" role="alert"><?= $escape($transactionError) ?></p><?php endif; ?>
         <div class="report-table-wrap">
             <table class="report-table">
-                <thead><tr><th scope="col">Ticket</th><th scope="col">Customer</th><th scope="col">Selected service</th><th scope="col">Queue dates</th><th scope="col">Queue status</th><th scope="col">Payment details</th></tr></thead>
+                <thead><tr><th scope="col">Ticket</th><th scope="col">Customer</th><th scope="col">Selected service</th><th scope="col">Queue dates</th><th scope="col">Queue status</th><th scope="col">Payment details</th><th scope="col" class="report-transaction-action">Action</th></tr></thead>
                 <tbody>
                     <?php foreach ($rows as $row): ?>
                     <tr>
@@ -770,9 +847,17 @@ require_once '../includes/header.php';
                             <small>Paid at: <?= $escape($dateLabel($row['paid_at'])) ?></small>
                             <?php endif; ?>
                         </td>
+                        <td class="report-transaction-action">
+                            <form method="post" action="<?= $escape($transactionReturnUrl) ?>" data-ticket="<?= $escape($row['ticket_number']) ?>" onsubmit="return confirm('Delete ticket #' + this.dataset.ticket + '? Its payment and rating records will also be deleted.');">
+                                <input type="hidden" name="action" value="delete_transaction">
+                                <input type="hidden" name="csrf_token" value="<?= $escape($transactionCsrf) ?>">
+                                <input type="hidden" name="queue_id" value="<?= (int)$row['id'] ?>">
+                                <button class="report-transaction-delete" type="submit" aria-label="Delete transaction <?= $escape($row['ticket_number']) ?>"><i data-feather="trash-2" aria-hidden="true"></i><span>Delete</span></button>
+                            </form>
+                        </td>
                     </tr>
                     <?php endforeach; ?>
-                    <?php if (!$rows): ?><tr><td colspan="6" class="report-empty">No transactions match these filters. Adjust the filters or reset to view all records.</td></tr><?php endif; ?>
+                    <?php if (!$rows): ?><tr><td colspan="7" class="report-empty">No transactions match these filters. Adjust the filters or reset to view all records.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </div>

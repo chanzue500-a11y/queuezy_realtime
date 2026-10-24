@@ -12,7 +12,7 @@ function salesQuery(mysqli $connection, string $sql): void
 }
 $now = new DateTimeImmutable('2026-10-23 18:00:00', new DateTimeZone('UTC'));
 $defaults = dailySalesFilters([], $now);
-salesExpect($defaults['date_from'] === '2026-10-18' && $defaults['date_to'] === '2026-10-24', 'Defaults must use Philippine dates');
+salesExpect($defaults['date_from'] === '2026-10-24' && $defaults['date_to'] === '2026-10-24', 'Default to today in Philippine time');
 foreach ([['sales_from' => '2026-02-30'], ['sales_to' => '2026-10-25'], ['sales_from' => []],
     ['sales_from' => '2026-10-24', 'sales_to' => '2026-10-23'], ['sales_from' => '2020-01-01']] as $invalid) {
     salesExpect(dailySalesFilters($invalid, $now)['errors'] !== [], 'Invalid range must be rejected');
@@ -22,12 +22,12 @@ foreach ([['sales_from' => '2026-02-30'], ['sales_to' => '2026-10-25'], ['sales_
 salesQuery($conn, 'CREATE TEMPORARY TABLE queue (id INT PRIMARY KEY, status VARCHAR(20), created_at DATETIME, completed_at DATETIME NULL)');
 salesQuery($conn, 'CREATE TEMPORARY TABLE queue_payments (queue_id INT PRIMARY KEY, status VARCHAR(20), amount DECIMAL(10,2), paid_at DATETIME)');
 for ($id = 1; $id <= 25; $id++) {
-    $time = $id === 1 ? '08:30:00' : ($id === 25 ? '17:00:00' : '12:00:00');
+    $time = $id === 1 ? '07:30:00' : ($id === 25 ? '17:00:00' : '12:00:00');
     salesQuery($conn, "INSERT INTO queue VALUES ($id,'completed','2026-10-15 09:00:00','2026-10-23 $time')");
     salesQuery($conn, "INSERT INTO queue_payments VALUES ($id,'paid',100.50,'2026-10-24 09:00:00')");
 }
 foreach ([
-    [26, 'completed', '2026-10-23 08:29:59', 'paid'],
+    [26, 'completed', '2026-10-23 07:29:59', 'paid'],
     [27, 'completed', '2026-10-23 17:00:01', 'paid'],
     [28, 'completed', '2026-10-23 12:00:00', 'pending'],
     [29, 'cancelled', '2026-10-23 12:00:00', 'paid'],
@@ -42,6 +42,8 @@ salesQuery($conn, "INSERT INTO queue_payments VALUES (32,'paid',999.99,'2026-10-
 $yesterday = dailySalesData($conn, dailySalesFilters(['sales_from' => '2026-10-23', 'sales_to' => '2026-10-23'], $now));
 salesExpect($yesterday['total_tickets'] === 25, 'Yesterday must have exactly 25 completed tickets within cutoff');
 salesExpect($yesterday['total_sales_cents'] === 251250, 'Sales must sum actual paid amounts exactly');
+salesExpect($yesterday['outside_tickets'] === 2 && $yesterday['outside_sales_cents'] === 199998, 'Show excluded before-opening/after-cutoff payments separately');
+salesExpect($yesterday['latest_outside_at'] === '2026-10-23 17:00:01', 'Explain the actual excluded completion time');
 salesExpect($yesterday['rows'][0]['date'] === '2026-10-23', 'Group by completion date, not creation/payment dates');
 $range = dailySalesData($conn, dailySalesFilters(['sales_from' => '2026-10-22', 'sales_to' => '2026-10-24'], $now));
 salesExpect(array_column($range['rows'], 'completed_tickets') === [1, 25, 0], 'Include today, yesterday, and zero-sale days');

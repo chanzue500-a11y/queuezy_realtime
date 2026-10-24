@@ -5,6 +5,10 @@ if (($_SESSION['user_role'] ?? '') !== 'staff') {
   header('Location: ../login.php');
   exit;
 }
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '') === 'delete') {
+  http_response_code(403);
+  exit('Only admins can delete queue tickets.');
+}
 require_once '../database/db.php';
 
 $msg = '';
@@ -105,19 +109,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
 
-    if ($_POST['action'] === 'delete' && $conn) {
-        $queueId = (int)($_POST['queue_id'] ?? 0);
-        if ($queueId > 0) {
-            $stmt = $conn->prepare("DELETE FROM queue WHERE id = ?");
-            if ($stmt) {
-                $stmt->bind_param("i", $queueId);
-                $stmt->execute();
-                $stmt->close();
-                header("Location: monitor.php?deleted=1");
-                exit;
-            }
-        }
-    }
 }
 
 // Fetch ONLY Queue tickets that exist in MySQL
@@ -341,11 +332,13 @@ require_once '../includes/header.php';
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
+    width: auto;
     height: 30px;
-    min-width: 30px;
+    min-width: 82px;
     min-height: 30px;
-    padding: 0;
+    padding: 6px 10px;
+    gap: 6px;
+    white-space: nowrap;
     border-radius: 10px;
     border: 1px solid rgba(196, 181, 253, 0.8);
     background: linear-gradient(135deg, #2a1b4d, #3b2368);
@@ -568,15 +561,9 @@ require_once '../includes/header.php';
                 data-date="<?= htmlspecialchars(date('d/m/Y H:i:s A', strtotime($q['created_at'] ?? 'now'))) ?>"
                 aria-label="Print receipt for ticket <?= htmlspecialchars($q['ticket_number']) ?>">
                 <i data-feather="printer"></i>
+                <span>Receipt</span>
               </button>
               <?php endif; ?>
-              <form method="post" class="inline" onsubmit="return confirm('Delete ticket #<?= htmlspecialchars($q['ticket_number'], ENT_QUOTES) ?>?');">
-                <input type="hidden" name="action" value="delete">
-                <input type="hidden" name="queue_id" value="<?= $q['id'] ?>">
-                <button type="submit" class="icon-only-action delete-action-button" title="Delete Ticket" aria-label="Delete ticket <?= htmlspecialchars($q['ticket_number']) ?>">
-                  <i data-feather="trash-2" class="w-3.5 h-3.5"></i>
-                </button>
-              </form>
             </div>
           </td>
         </tr>
@@ -711,7 +698,7 @@ require_once '../includes/header.php';
       Thank you for using Queuezy!<br>
       We look forward to serving you again.<br>
       Opening Hours:<br>
-      Monday to Friday 8:30AM to 5:00PM
+      Monday to Friday 7:30AM to 5:00PM
     </div>
   </div>
 </body>

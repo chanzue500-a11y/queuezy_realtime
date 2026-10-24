@@ -4,6 +4,19 @@ if (!in_array($_SESSION['user_role'] ?? '', ['admin', 'staff'], true)) {
     header('Location: ../login.php');
     exit;
 }
+$isAdmin = ($_SESSION['user_role'] ?? '') === 'admin';
+$ratingsCsrfToken = $isAdmin ? ($_SESSION['ratings_csrf'] ??= bin2hex(random_bytes(32))) : '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_rating') {
+    if (!$isAdmin) {
+        http_response_code(403);
+        exit('Only admins can delete ratings.');
+    }
+    $submittedToken = $_POST['csrf_token'] ?? '';
+    if (!is_string($submittedToken) || !hash_equals($ratingsCsrfToken, $submittedToken)) {
+        http_response_code(403);
+        exit('Your session could not be verified. Refresh the page and try again.');
+    }
+}
 require_once __DIR__ . '/../database/db.php';
 require_once __DIR__ . '/../includes/ratings_report.php';
 $conn = $conn ?? null;
@@ -80,7 +93,6 @@ if ($conn) {
 
 $pageTitle = 'Ratings | Queuezy';
 $pageHeading = 'Ratings';
-$isAdmin = ($_SESSION['user_role'] ?? '') === 'admin';
 require_once '../includes/header.php';
 ?>
 
@@ -150,7 +162,6 @@ require_once '../includes/header.php';
   <header class="ratings-heading">
     <div>
       <h1>Service ratings</h1>
-      <p>Customer scores and comments for paid services.</p>
     </div>
   </header>
 
@@ -202,7 +213,7 @@ require_once '../includes/header.php';
           <th>Comment</th>
           <th>Payment</th>
           <th>Rated</th>
-          <th>Action</th>
+          <?php if ($isAdmin): ?><th>Action</th><?php endif; ?>
         </tr>
       </thead>
       <tbody id="ratingsTableBody">
@@ -225,16 +236,19 @@ require_once '../includes/header.php';
           <td class="rating-comment"><?= $feedback !== '' ? htmlspecialchars($feedback, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '<span class="ratings-count">No comment</span>' ?></td>
           <td><?= ($ratingRow['payment_status'] ?? '') === 'paid' ? 'Paid &middot; PHP ' . number_format((float)($ratingRow['amount'] ?? 0), 2) : 'Unpaid' ?></td>
           <td><?= htmlspecialchars($ratingRow['created_at'] ?? '') ?></td>
+          <?php if ($isAdmin): ?>
           <td>
             <form method="post" onsubmit="return confirm('Delete this rating?');">
+              <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($ratingsCsrfToken, ENT_QUOTES, 'UTF-8') ?>">
               <input type="hidden" name="action" value="delete_rating">
               <input type="hidden" name="rating_id" value="<?= (int)($ratingRow['id'] ?? 0) ?>">
               <button type="submit" class="ratings-delete-button">Delete</button>
             </form>
           </td>
+          <?php endif; ?>
         </tr>
         <?php endforeach; ?>
-        <tr id="ratingsSearchEmpty" <?= $ratingRows ? 'hidden' : '' ?>><td colspan="7" class="ratings-empty">No customer ratings match this filter.</td></tr>
+        <tr id="ratingsSearchEmpty" <?= $ratingRows ? 'hidden' : '' ?>><td colspan="<?= $isAdmin ? 7 : 6 ?>" class="ratings-empty">No customer ratings match this filter.</td></tr>
       </tbody>
     </table>
   </div>

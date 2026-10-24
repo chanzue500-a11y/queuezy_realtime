@@ -606,7 +606,7 @@ require_once '../includes/header.php';
       <h3 style="font-size: 28px; font-weight: 900; color: #4f46e5; margin: 0 0 8px 0;">
         <?= array_sum(array_column($deptList, 'service_count')) ?>
       </h3>
-      <p style="font-size: 12px; color: #64748b; margin: 0;">Configured service lines</p>
+      <p style="font-size: 12px; color: #64748b; margin: 0;">Service lines</p>
     </div>
 
     <div class="stat-card-luxury">
