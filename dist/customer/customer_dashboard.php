@@ -660,6 +660,7 @@ $estimatedWaitMins = $myActiveTicket
     .queue-sidebar-backdrop {
       display: none;
     }
+    #queueSidebarBackdrop[hidden] { display: none !important; }
     .queue-nav {
       display: flex;
       flex-direction: column;
@@ -1593,7 +1594,7 @@ $estimatedWaitMins = $myActiveTicket
     </div>
   </aside>
   <script>if (typeof feather !== 'undefined') feather.replace();</script>
-  <div class="queue-sidebar-backdrop" id="queueSidebarBackdrop"></div>
+  
   <div class="customer-call-overlay" id="customerCallOverlay" role="alertdialog" aria-modal="true" aria-labelledby="customerCallTitle">
     <div class="customer-call-dialog">
       <p class="text-xs font-bold uppercase tracking-widest text-blue-200">Your ticket is calling</p>
@@ -1607,7 +1608,7 @@ $estimatedWaitMins = $myActiveTicket
   <!-- Main Content -->
   <main class="queue-main">
     <header class="queue-topbar">
-      <button class="queue-menu" id="queueMenu" type="button" aria-label="Open sidebar"><span aria-hidden="true">&gt;</span></button>
+      <button class="queue-menu" id="queueMenu" type="button" aria-label="Open sidebar" aria-controls="queueSidebar" aria-expanded="false"><span aria-hidden="true">&gt;</span></button>
       <div class="queue-topbar__actions">
         <button class="queue-icon-button" id="notificationButton" type="button" aria-label="Notifications" aria-expanded="false"><i class="fa-solid fa-bell"></i><?php if ($myActiveTicket): ?><b id="topNotificationDot" aria-label="Unread notification"></b><?php endif; ?></button>
         <div class="notification-panel" id="notificationPanel" role="status" aria-live="polite">
@@ -2625,6 +2626,8 @@ $estimatedWaitMins = $myActiveTicket
     const closeQueueSidebar = () => {
       queueSidebar?.classList.remove('is-open');
       queueSidebarBackdrop?.classList.remove('is-visible');
+      if (queueSidebarBackdrop) queueSidebarBackdrop.hidden = true;
+      queueMenu?.setAttribute('aria-expanded', 'false');
     };
     const toggleQueueSidebar = () => {
       if (!queueSidebar) return;
@@ -2632,6 +2635,8 @@ $estimatedWaitMins = $myActiveTicket
         queueSidebar.classList.remove('is-collapsed');
         const isOpen = queueSidebar.classList.toggle('is-open');
         queueSidebarBackdrop?.classList.toggle('is-visible', isOpen);
+        if (queueSidebarBackdrop) queueSidebarBackdrop.hidden = !isOpen;
+        queueMenu?.setAttribute('aria-expanded', String(isOpen));
       } else {
         const collapsed = queueSidebar.classList.toggle('is-collapsed');
         queueLayout?.classList.toggle('sidebar-collapsed', collapsed);
@@ -2647,6 +2652,8 @@ $estimatedWaitMins = $myActiveTicket
       }
     };
     if (queueSidebar) {
+      closeQueueSidebar();
+      window.matchMedia('(max-width: 900px)').addEventListener('change', closeQueueSidebar);
       queueMenu?.addEventListener('click', toggleQueueSidebar);
       queueSidebarToggle?.addEventListener('click', toggleSidebarButton);
       queueSidebarBackdrop?.addEventListener('click', closeQueueSidebar);
