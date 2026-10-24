@@ -1,7 +1,17 @@
 <?php
 require_once '../database/db.php';
 
-$pageTitle = 'Notifications | Queuezy Admin';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['admin', 'staff'], true)) {
+    header('Location: ../login.php');
+    exit;
+}
+require_once __DIR__ . '/../includes/workspace_notifications.php';
+$workspaceNotifications = workspaceNotificationSnapshot($conn ?? null, $_SESSION['user_role']);
+
+$pageTitle = 'Notifications | Queuezy Staff';
 $pageHeading = 'Notifications';
 require_once '../includes/header.php';
 ?>
@@ -36,7 +46,7 @@ require_once '../includes/header.php';
             </div>
             <div>
                 <h2 class="text-lg font-black text-slate-900">Latest active ticket</h2>
-                <p data-notification-field="call_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['call_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                <p data-notification-field="call_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['call_message'] ?? 'Notifications are temporarily unavailable.', ENT_QUOTES, 'UTF-8') ?></p>
             </div>
         </div>
     </section>
@@ -48,7 +58,7 @@ require_once '../includes/header.php';
             </div>
             <div>
                 <h2 class="text-lg font-black text-slate-900">Waiting queue</h2>
-                <p data-notification-field="waiting_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['waiting_message'] ?? $workspaceNotifications['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                <p data-notification-field="waiting_message" class="mt-2 text-sm text-slate-600"><?= htmlspecialchars($workspaceNotifications['waiting_message'] ?? 'Notifications are temporarily unavailable.', ENT_QUOTES, 'UTF-8') ?></p>
                 <?php if (($_SESSION['user_role'] ?? '') === 'staff'): ?>
                     <a href="monitor.php" class="mt-3 inline-flex text-sm font-bold text-purple-600 hover:text-purple-700">Open queue monitor</a>
                 <?php endif; ?>
